@@ -364,68 +364,38 @@
   changed_when: false
 
 # ── GCD initialization (idempotent) ──────────────────────────────────────────
-# Uses the CPE Admin Console REST API to check and create the FileNet domain.
-# The GCD must be created before any object stores can be created.
+# Uses the ACCE REST API to check and create the FileNet P8 domain (GCD).
+# Object stores (DOCS/DOS/TOS) are created by the BAStudio content-init Job (step 10).
 
 - name: Check if FileNet domain already initialized
-  ansible.builtin.shell: |
+  ansible.builtin.shell: >
     oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} --
-    curl -sk -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
+    curl -sk
+    -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
+    -H "Accept: application/atom+xml"
     "https://localhost:9443/acce/dispatcher/atom/1.0/domains"
-    -H "Accept: application/atom+xml" 2>&1 | grep -c "<id>" || true
+    | grep -c "<entry>" || echo "0"
   register: _gcd_check
   changed_when: false
   no_log: true
 
-- name: Initialize FileNet GCD domain
-  ansible.builtin.shell: |
-    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} -- bash -c "
-    /opt/ibm/wlp/usr/servers/defaultServer/bin/executeScript.sh \
-      -userId {{ cpe_admin_user }} \
-      -password {{ cpe_admin_password }} \
-      -url cemp:iiop://localhost:2809/FileNet/Engine \
-      -script /opt/ibm/scripts/init-gcd.py 2>&1"
+- name: Initialize FileNet GCD domain via ACCE REST API
+  ansible.builtin.shell: >
+    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} --
+    curl -sk -X POST
+    -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
+    -H "Content-Type: application/x-www-form-urlencoded"
+    "https://localhost:9443/acce/init"
+    --data-urlencode "new_domain=true"
+    --data-urlencode "gcdds=FNGCDDS"
+    --data-urlencode "domain_name=P8Domain"
   register: _gcd_init
   changed_when: true
   failed_when: >
     _gcd_init.rc != 0 and
-    'already exists' not in _gcd_init.stdout | lower and
-    'already exists' not in _gcd_init.stderr | lower
-  no_log: true
+    'already' not in (_gcd_init.stdout | lower) and
+    'exist' not in (_gcd_init.stdout | lower)
   when: (_gcd_check.stdout | default('0') | trim | int) == 0
-
-# ── Object store initialization ───────────────────────────────────────────────
-# Each object store is created using CPE admin scripting after GCD is ready.
-# Scripts are embedded inline and piped into the scripting engine.
-
-- name: Create DOCS object store
-  ansible.builtin.shell: |
-    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} -- bash -c "
-    /opt/ibm/wlp/usr/servers/defaultServer/bin/executeScript.sh \
-      -userId {{ cpe_admin_user }} \
-      -password {{ cpe_admin_password }} \
-      -url cemp:iiop://localhost:2809/FileNet/Engine \
-      -scriptText \"
-from com.filenet.api.core import Factory
-from com.filenet.api.admin import ObjectStore
-conn = Factory.Connection.getConnection('iiop://localhost:2809/FileNet/Engine')
-domain = Factory.Domain.fetchInstance(conn, None, None)
-ostore = domain.fetchObject(ObjectStore, '{{ docs_db_name | upper }}', None) if any(
-  o.get_SymbolicName() == '{{ docs_db_name | upper }}'
-  for o in domain.get_ObjectStores().iterator()
-) else None
-if ostore is None:
-  ostore = Factory.ObjectStore.createInstance(domain, '{{ docs_db_name | upper }}')
-  ostore.set_DisplayName('DOCS Object Store')
-  ostore.set_DataSource(domain.fetchObject(None,'FNOSDOCS',None))
-  ostore.save(1)
-print('DONE')
-\" 2>&1"
-  register: _docs_init
-  changed_when: "'DONE' in _docs_init.stdout"
-  failed_when: >
-    _docs_init.rc != 0 and
-    'already exists' not in _docs_init.stdout | lower
   no_log: true
 
 - name: CPE summary
@@ -434,4 +404,4 @@ print('DONE')
       - "CPE ready at https://{{ cpe_host }}:{{ cpe_port }}"
       - "Admin console : https://{{ baw_hostname }}/acce/"
       - "WSI endpoint  : https://{{ cpe_host }}:{{ cpe_port }}/wsi/FNCEWS40MTOM/"
-      - "Object stores : {{ docs_db_name | upper }}, {{ dos_db_name | upper }}, {{ tos_db_name | upper }}"
+      - "Object stores (DOCS/DOS/TOS) are created by BAStudio content-init Job (step 10)"
