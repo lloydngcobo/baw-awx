@@ -56,7 +56,7 @@
     awx_project_name:   "baw-awx"
     awx_inventory_name: "BAW Localhost"
     awx_ee_name:        "baw-ee"
-    awx_ocp_cred_name:  "OpenShift API"
+    awx_ocp_cred_name:  "OpenShift API (BAW)"
 
   pre_tasks:
     - name: Validate required variables
@@ -381,28 +381,113 @@
         controller_password: "{{ awx_password }}"
         validate_certs: false
 
-    - name: Add workflow nodes — Prereqs → Approval → Full Install → ArgoCD
+    - name: Workflow node — ArgoCD (terminal)
       awx.awx.workflow_job_template_node:
         workflow_job_template: "BAW Full Deploy"
         organization: "{{ awx_org_name }}"
-        identifier: "{{ item.id }}"
-        unified_job_template: "{{ item.template | default(omit) }}"
-        approval_node: "{{ item.approval | default(omit) }}"
+        identifier: "node-argocd"
+        unified_job_template: "BAW Configure ArgoCD"
         all_parents_must_converge: false
         state: present
         controller_host: "{{ awx_url }}"
         controller_username: "{{ awx_username }}"
         controller_password: "{{ awx_password }}"
         validate_certs: false
-      loop:
-        - id: "node-prereqs"
-          template: "BAW Prereqs Only"
-        - id: "node-approval"
-          approval: true
-        - id: "node-install"
-          template: "BAW Full Install"
-        - id: "node-argocd"
-          template: "BAW Configure ArgoCD"
+
+    - name: Workflow node — Full Install → ArgoCD
+      awx.awx.workflow_job_template_node:
+        workflow_job_template: "BAW Full Deploy"
+        organization: "{{ awx_org_name }}"
+        identifier: "node-install"
+        unified_job_template: "BAW Full Install"
+        success_nodes:
+          - node-argocd
+        all_parents_must_converge: false
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+
+    - name: Workflow node — Approval Gate (no edge set here — approval nodes require REST workaround)
+      awx.awx.workflow_job_template_node:
+        workflow_job_template: "BAW Full Deploy"
+        organization: "{{ awx_org_name }}"
+        identifier: "node-approval"
+        approval_node:
+          name: "Approve BAW Deploy"
+          description: "Manual approval gate before running Full Install"
+          timeout: 0
+        all_parents_must_converge: false
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+
+    - name: Look up BAW Full Deploy workflow template ID
+      ansible.builtin.uri:
+        url: "{{ awx_url }}/api/v2/workflow_job_templates/?name=BAW+Full+Deploy"
+        method: GET
+        user: "{{ awx_username }}"
+        password: "{{ awx_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: 200
+      register: wf_info
+
+    - name: Get approval node ID
+      ansible.builtin.uri:
+        url: "{{ awx_url }}/api/v2/workflow_job_template_nodes/?workflow_job_template={{ wf_info.json.results[0].id }}&identifier=node-approval"
+        method: GET
+        user: "{{ awx_username }}"
+        password: "{{ awx_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: 200
+      register: approval_node_info
+      until: approval_node_info.json.count > 0
+      retries: 5
+      delay: 2
+
+    - name: Get install node ID
+      ansible.builtin.uri:
+        url: "{{ awx_url }}/api/v2/workflow_job_template_nodes/?workflow_job_template={{ wf_info.json.results[0].id }}&identifier=node-install"
+        method: GET
+        user: "{{ awx_username }}"
+        password: "{{ awx_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: 200
+      register: install_node_info
+
+    - name: Link approval → install (idempotent via status_code 204/400)
+      ansible.builtin.uri:
+        url: "{{ awx_url }}/api/v2/workflow_job_template_nodes/{{ approval_node_info.json.results[0].id }}/success_nodes/"
+        method: POST
+        user: "{{ awx_username }}"
+        password: "{{ awx_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        body_format: json
+        body:
+          id: "{{ install_node_info.json.results[0].id }}"
+        status_code: [204, 400]
+
+    - name: Workflow node — Prereqs → Approval Gate
+      awx.awx.workflow_job_template_node:
+        workflow_job_template: "BAW Full Deploy"
+        organization: "{{ awx_org_name }}"
+        identifier: "node-prereqs"
+        unified_job_template: "BAW Prereqs Only"
+        success_nodes:
+          - node-approval
+        all_parents_must_converge: false
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
 
     # ── Summary ────────────────────────────────────────────────────────────────
 
