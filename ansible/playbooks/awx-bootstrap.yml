@@ -222,6 +222,11 @@
               type: password
               required: true
               default: ""
+            - question_name: "ISVD License Key"
+              variable: ldap_isvd_license_key
+              type: password
+              required: true
+              default: ""
             - question_name: "CPE Admin Password"
               variable: cpe_admin_password
               type: password
@@ -282,7 +287,31 @@
         credentials:
           - "{{ awx_ocp_cred_name }}"
         ask_variables_on_launch: true
-        survey_enabled: false
+        survey_enabled: true
+        survey_spec:
+          name: "BAW Prereqs Survey"
+          description: ""
+          spec:
+            - question_name: "LDAP Admin Password"
+              variable: ldap_admin_password
+              type: password
+              required: true
+              default: ""
+            - question_name: "ISVD License Key"
+              variable: ldap_isvd_license_key
+              type: password
+              required: true
+              default: ""
+            - question_name: "PostgreSQL Admin Password"
+              variable: postgres_admin_password
+              type: password
+              required: true
+              default: ""
+            - question_name: "Keystore Password (PKCS12)"
+              variable: keystore_password
+              type: password
+              required: true
+              default: ""
         extra_vars:
           ocp_api_url: "{{ ocp_api_url }}"
         state: present

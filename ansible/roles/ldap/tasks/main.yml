@@ -20,7 +20,8 @@
         labels:
           app: baw-ldap
       stringData:
-        ISVD_ADMIN_PWD: "{{ ldap_admin_password }}"
+        ISVD_ADMIN_PWD:    "{{ ldap_admin_password }}"
+        ISVD_LICENSE_KEY:  "{{ ldap_isvd_license_key }}"
   no_log: true
 
 # ── LDIF ConfigMap ────────────────────────────────────────────────────────────
@@ -231,7 +232,7 @@
               pwd: "$ISVD_ADMIN_PWD"
             license:
               accept: "limited"
-              key: ""
+              key: "$ISVD_LICENSE_KEY"
             ports:
               ldap: 9389
               ldaps: 0
@@ -301,6 +302,11 @@
                       secretKeyRef:
                         name: ldap-secret
                         key: ISVD_ADMIN_PWD
+                  - name: ISVD_LICENSE_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: ldap-secret
+                        key: ISVD_LICENSE_KEY
                   - name: YAML_CONFIG_FILE
                     value: /isvd-config/config.yaml
                   - name: TZ
