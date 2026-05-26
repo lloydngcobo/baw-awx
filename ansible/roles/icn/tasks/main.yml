@@ -190,7 +190,11 @@
                       name: icn-secret
                 env:
                   - name: LICENSE
+                    value: "accept"
+                  - name: LICENSEMODEL
                     value: "{{ baw_license }}"
+                  - name: disableFIPS
+                    value: "true"
                   - name: TZ
                     value: "{{ timezone }}"
                   - name: JVM_HEAP_XMS

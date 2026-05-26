@@ -194,6 +194,8 @@
                     value: "{{ ldap_port }}"
                   - name: UMS_LDAP_BASE_DN
                     value: "{{ ldap_base_dn }}"
+                  - name: disableFIPS
+                    value: "true"
                   - name: TZ
                     value: "{{ timezone }}"
                   - name: JVM_HEAP_XMS

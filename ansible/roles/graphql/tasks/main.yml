@@ -104,6 +104,8 @@
                 env:
                   - name: CPE_URI
                     value: "https://{{ cpe_host }}:{{ cpe_port }}/wsi/FNCEWS40MTOM/"
+                  - name: disableFIPS
+                    value: "true"
                   - name: TZ
                     value: "{{ timezone }}"
                 resources:

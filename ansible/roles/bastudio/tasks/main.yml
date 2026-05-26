@@ -249,6 +249,8 @@
                   - configMapRef:
                       name: bastudio-bootstrap-config
                 env:
+                  - name: disableFIPS
+                    value: "true"
                   - name: TZ
                     value: "{{ timezone }}"
                 volumeMounts:
@@ -333,6 +335,8 @@
                   - configMapRef:
                       name: bastudio-bootstrap-config
                 env:
+                  - name: disableFIPS
+                    value: "true"
                   - name: TZ
                     value: "{{ timezone }}"
                 volumeMounts:
@@ -399,6 +403,8 @@
                   - configMapRef:
                       name: bastudio-bootstrap-config
                 env:
+                  - name: disableFIPS
+                    value: "true"
                   - name: TZ
                     value: "{{ timezone }}"
                   - name: JVM_HEAP_XMS
@@ -539,6 +545,8 @@
                   - configMapRef:
                       name: bastudio-bootstrap-config
                 env:
+                  - name: disableFIPS
+                    value: "true"
                   - name: TZ
                     value: "{{ timezone }}"
                 volumeMounts:
@@ -610,6 +618,8 @@
                   - configMapRef:
                       name: bastudio-bootstrap-config
                 env:
+                  - name: disableFIPS
+                    value: "true"
                   - name: TZ
                     value: "{{ timezone }}"
                 volumeMounts:
