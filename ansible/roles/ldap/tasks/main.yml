@@ -288,6 +288,7 @@
             labels:
               app: baw-ldap
           spec:
+            terminationGracePeriodSeconds: 30
             securityContext:
               fsGroup: 1000
             containers:
@@ -389,7 +390,7 @@
 - name: Wait for LDAP deployment
   ansible.builtin.shell: >
     oc rollout status deployment/ldap
-    -n {{ infra_namespace }} --timeout=300s
+    -n {{ infra_namespace }} --timeout=600s
   changed_when: false
 
 - name: Get LDAP pod name
