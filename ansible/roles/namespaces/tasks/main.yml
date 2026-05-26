@@ -1,32 +1,71 @@
 ---
 # Role: namespaces
 # Creates baw + infra namespaces, UID annotations, SCCs, and image pull secrets.
+#
+# NOTE: We use `oc new-project` (not kubernetes.core.k8s) for namespace creation
+# so that OpenShift's project admission webhook fires and auto-assigns all SCC
+# annotations including openshift.io/sa.scc.mcs (required for pod scheduling).
+# kubernetes.core.k8s bypasses that webhook, leaving .mcs unset → FailedCreate.
 
-- name: Create baw namespace
+- name: Create baw namespace via oc new-project
+  ansible.builtin.shell: >
+    oc new-project {{ baw_namespace }}
+    --description="IBM Business Automation Workflow"
+  register: _baw_proj
+  failed_when: _baw_proj.rc != 0 and 'already exists' not in _baw_proj.stderr
+  changed_when: _baw_proj.rc == 0
+
+- name: Apply baw namespace labels
   kubernetes.core.k8s:
     state: present
     definition:
-      apiVersion: project.openshift.io/v1
-      kind: Project
+      apiVersion: v1
+      kind: Namespace
       metadata:
         name: "{{ baw_namespace }}"
-        annotations:
-          openshift.io/sa.scc.uid-range: "1000140000/1000"
-          openshift.io/sa.scc.supplemental-groups: "1000140000/1000"
         labels:
           app: baw
 
-- name: Create infra namespace
+- name: Create infra namespace via oc new-project
+  ansible.builtin.shell: >
+    oc new-project {{ infra_namespace }}
+    --description="BAW infrastructure (PostgreSQL, LDAP)"
+  register: _infra_proj
+  failed_when: _infra_proj.rc != 0 and 'already exists' not in _infra_proj.stderr
+  changed_when: _infra_proj.rc == 0
+
+- name: Apply infra namespace labels
   kubernetes.core.k8s:
     state: present
     definition:
-      apiVersion: project.openshift.io/v1
-      kind: Project
+      apiVersion: v1
+      kind: Namespace
       metadata:
         name: "{{ infra_namespace }}"
         labels:
           pod-security.kubernetes.io/enforce: privileged
           app: baw-infra
+
+# ── MCS annotation guard ──────────────────────────────────────────────────────
+# Protect against pre-existing namespaces that were created without the MCS
+# annotation (e.g. by an older version of this role). Without it, pod scheduling
+# fails with "unable to find annotation openshift.io/sa.scc.mcs".
+
+- name: Check baw namespace has sa.scc.mcs annotation
+  ansible.builtin.shell: >
+    oc get namespace {{ baw_namespace }}
+    -o jsonpath='{.metadata.annotations.openshift\.io/sa\.scc\.mcs}'
+  register: _baw_mcs
+  changed_when: false
+
+- name: Fail if baw namespace is missing sa.scc.mcs after creation
+  ansible.builtin.fail:
+    msg: >
+      Namespace '{{ baw_namespace }}' is missing openshift.io/sa.scc.mcs annotation.
+      This prevents pod scheduling. Delete the namespace and re-run, or annotate it
+      manually: oc annotate namespace {{ baw_namespace }} openshift.io/sa.scc.mcs='s0:cX,cY'
+      using a label pair not already in use on the cluster.
+  when: _baw_mcs.stdout | length == 0
 
 # ── SCCs ──────────────────────────────────────────────────────────────────────
 # BAW/CPE/ICN/UMS containers run as UID 1000140000 (fixed).
@@ -89,13 +128,14 @@
 - name: Warn if entitlement key not set
   ansible.builtin.debug:
     msg: >
-      WARNING: ibm_entitlement_key is empty.
-      IBM image pulls from cp.icr.io will fail.
-      Set ibm_entitlement_key in group_vars/all.yml or as an AWX survey variable.
+      WARNING: ibm_entitlement_key is empty — IBM image pulls from cp.icr.io WILL fail.
+      Pass it via the AWX survey (password field) or as an extra_var when launching.
+      Get your key at https://myibm.ibm.com/products-services/containerlibrary
   when: ibm_entitlement_key | length == 0
 
 - name: Namespaces ready
   ansible.builtin.debug:
     msg:
-      - "Namespace '{{ baw_namespace }}' ready (UID range: 1000140000/1000, anyuid SCC granted)"
+      - "Namespace '{{ baw_namespace }}' ready (anyuid SCC granted)"
       - "Namespace '{{ infra_namespace }}' ready (privileged SCC granted)"
+      - "IBM entitlement pull secret created in both namespaces"
