@@ -411,18 +411,19 @@
   changed_when: false
 
 - name: Check if LDAP base DIT already seeded
-  ansible.builtin.shell: >
-    oc exec -n {{ infra_namespace }} {{ _ldap_pod.stdout }} --
+  ansible.builtin.shell: >-
+    oc exec -n {{ infra_namespace }} -c ldap {{ _ldap_pod.stdout | trim }} --
     ldapsearch -h localhost -p 9389
     -D "cn=root" -w "{{ ldap_admin_password }}"
-    -b "ou=dev,{{ ldap_base_dn }}" -s base 2>&1 | grep -c "dn:" || true
+    -b "ou=dev,{{ ldap_base_dn }}" -s base
+    "(objectClass=*)" 2>/dev/null | wc -l | tr -d ' '
   register: _ldap_base_check
   changed_when: false
   no_log: true
 
 - name: Load base DIT LDIF
-  ansible.builtin.shell: >
-    oc exec -n {{ infra_namespace }} {{ _ldap_pod.stdout }} --
+  ansible.builtin.shell: >-
+    oc exec -n {{ infra_namespace }} -c ldap {{ _ldap_pod.stdout | trim }} --
     ldapadd -c -h localhost -p 9389
     -D "cn=root" -w "{{ ldap_admin_password }}"
     -f /tmp/ldifs/base.ldif
@@ -433,18 +434,19 @@
   when: (_ldap_base_check.stdout | default('0') | trim | int) == 0
 
 - name: Check if LDAP users already loaded
-  ansible.builtin.shell: >
-    oc exec -n {{ infra_namespace }} {{ _ldap_pod.stdout }} --
+  ansible.builtin.shell: >-
+    oc exec -n {{ infra_namespace }} -c ldap {{ _ldap_pod.stdout | trim }} --
     ldapsearch -h localhost -p 9389
     -D "cn=root" -w "{{ ldap_admin_password }}"
-    -b "ou=dev,{{ ldap_base_dn }}" "(uid=bawadmin)" 2>&1 | grep -c "dn:" || true
+    -b "ou=dev,{{ ldap_base_dn }}" "(uid=bawadmin)"
+    2>/dev/null | wc -l | tr -d ' '
   register: _ldap_users_check
   changed_when: false
   no_log: true
 
 - name: Load users LDIF
-  ansible.builtin.shell: >
-    oc exec -n {{ infra_namespace }} {{ _ldap_pod.stdout }} --
+  ansible.builtin.shell: >-
+    oc exec -n {{ infra_namespace }} -c ldap {{ _ldap_pod.stdout | trim }} --
     ldapadd -c -h localhost -p 9389
     -D "cn=root" -w "{{ ldap_admin_password }}"
     -f /tmp/ldifs/users.ldif
@@ -455,18 +457,19 @@
   when: (_ldap_users_check.stdout | default('0') | trim | int) == 0
 
 - name: Check if LDAP groups already loaded
-  ansible.builtin.shell: >
-    oc exec -n {{ infra_namespace }} {{ _ldap_pod.stdout }} --
+  ansible.builtin.shell: >-
+    oc exec -n {{ infra_namespace }} -c ldap {{ _ldap_pod.stdout | trim }} --
     ldapsearch -h localhost -p 9389
     -D "cn=root" -w "{{ ldap_admin_password }}"
-    -b "ou=dev,{{ ldap_base_dn }}" "(cn=bawadmins)" 2>&1 | grep -c "dn:" || true
+    -b "ou=dev,{{ ldap_base_dn }}" "(cn=bawadmins)"
+    2>/dev/null | wc -l | tr -d ' '
   register: _ldap_groups_check
   changed_when: false
   no_log: true
 
 - name: Load groups LDIF
-  ansible.builtin.shell: >
-    oc exec -n {{ infra_namespace }} {{ _ldap_pod.stdout }} --
+  ansible.builtin.shell: >-
+    oc exec -n {{ infra_namespace }} -c ldap {{ _ldap_pod.stdout | trim }} --
     ldapadd -c -h localhost -p 9389
     -D "cn=root" -w "{{ ldap_admin_password }}"
     -f /tmp/ldifs/groups.ldif
