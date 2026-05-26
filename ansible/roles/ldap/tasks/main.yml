@@ -19,9 +19,12 @@
         namespace: "{{ infra_namespace }}"
         labels:
           app: baw-ldap
-      stringData:
-        ISVD_ADMIN_PWD:    "{{ ldap_admin_password }}"
-        ISVD_LICENSE_KEY:  "{{ ldap_isvd_license_key }}"
+      stringData: >-
+        {{
+          {'ISVD_ADMIN_PWD': ldap_admin_password} |
+          combine({'ISVD_LICENSE_KEY': ldap_isvd_license_key}
+                  if ldap_isvd_license_key | length > 0 else {})
+        }}
   no_log: true
 
 # ── LDIF ConfigMap ────────────────────────────────────────────────────────────
