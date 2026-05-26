@@ -1,0 +1,15 @@
+# ansible-builder build artifacts
+context/
+*.tar.gz
+
+# cert work directory (generated at runtime, contains private keys)
+/tmp/baw-certs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Editor
+.vscode/
+*.swp
