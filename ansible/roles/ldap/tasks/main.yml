@@ -335,7 +335,8 @@
                         /opt/ibm/ldap/V10.0.4/bin/ldapsearch
                         -h localhost -p 9389
                         -D "cn=root" -w "${ISVD_ADMIN_PWD}"
-                        -b "{{ ldap_base_dn }}" -s base > /dev/null 2>&1
+                        -b "{{ ldap_base_dn }}" -s base
+                        "(objectClass=*)" > /dev/null 2>&1
                   initialDelaySeconds: 90
                   periodSeconds: 15
                   timeoutSeconds: 10
@@ -349,7 +350,8 @@
                         /opt/ibm/ldap/V10.0.4/bin/ldapsearch
                         -h localhost -p 9389
                         -D "cn=root" -w "${ISVD_ADMIN_PWD}"
-                        -b "{{ ldap_base_dn }}" -s base > /dev/null 2>&1
+                        -b "{{ ldap_base_dn }}" -s base
+                        "(objectClass=*)" > /dev/null 2>&1
                   initialDelaySeconds: 60
                   periodSeconds: 15
                   timeoutSeconds: 10
