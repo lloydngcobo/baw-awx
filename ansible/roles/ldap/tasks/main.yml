@@ -206,6 +206,43 @@
           member: uid=bawuser,ou=dev,dc=demodom,dc=nl
   no_log: true
 
+# ── ISVD server configuration ─────────────────────────────────────────────────
+# ISVD 10.x bootstrapper reads /var/isvd/config.yaml at startup.
+# The '$VAR' syntax inside the YAML is resolved by the bootstrapper from env.
+# Required fields: general.license (accept + key), general.admin.pwd,
+#                  general.ports.ldap (defaults to 0 = disabled!), server.suffixes.
+
+- name: Create ISVD server config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ldap-isvd-config
+        namespace: "{{ infra_namespace }}"
+        labels:
+          app: baw-ldap
+      data:
+        config.yaml: |
+          general:
+            admin:
+              dn: "cn=root"
+              pwd: "$ISVD_ADMIN_PWD"
+            license:
+              accept: "limited"
+              key: ""
+            ports:
+              ldap: 9389
+              ldaps: 0
+            json-logging: true
+          server:
+            suffixes:
+              - dn: "{{ ldap_base_dn }}"
+                object-classes:
+                  - top
+                  - domain
+
 # ── Storage ───────────────────────────────────────────────────────────────────
 
 - name: Create LDAP data PVC
@@ -259,15 +296,11 @@
                   - containerPort: 9389
                     name: ldap
                 env:
-                  - name: ISVD_ADMIN_DN
-                    value: "cn=root"
                   - name: ISVD_ADMIN_PWD
                     valueFrom:
                       secretKeyRef:
                         name: ldap-secret
                         key: ISVD_ADMIN_PWD
-                  - name: ISVD_SUFFIX
-                    value: "{{ ldap_base_dn }}"
                   - name: TZ
                     value: "{{ timezone }}"
                 resources:
@@ -282,11 +315,12 @@
                     command:
                       - /bin/sh
                       - -c
-                      - >
-                        ldapsearch -x -H ldap://localhost:9389
+                      - >-
+                        /opt/ibm/ldap/V10.0.4/bin/ldapsearch -x
+                        -H ldap://localhost:9389
                         -D "cn=root" -w "${ISVD_ADMIN_PWD}"
                         -b "{{ ldap_base_dn }}" -s base > /dev/null 2>&1
-                  initialDelaySeconds: 60
+                  initialDelaySeconds: 90
                   periodSeconds: 15
                   failureThreshold: 8
                 readinessProbe:
@@ -294,22 +328,29 @@
                     command:
                       - /bin/sh
                       - -c
-                      - >
-                        ldapsearch -x -H ldap://localhost:9389
+                      - >-
+                        /opt/ibm/ldap/V10.0.4/bin/ldapsearch -x
+                        -H ldap://localhost:9389
                         -D "cn=root" -w "${ISVD_ADMIN_PWD}"
                         -b "{{ ldap_base_dn }}" -s base > /dev/null 2>&1
-                  initialDelaySeconds: 30
-                  periodSeconds: 10
+                  initialDelaySeconds: 60
+                  periodSeconds: 15
                   failureThreshold: 12
                 volumeMounts:
                   - name: data
-                    mountPath: /var/lib/isvd
+                    mountPath: /var/isvd
+                  - name: config
+                    mountPath: /var/isvd/config.yaml
+                    subPath: config.yaml
                   - name: ldifs
                     mountPath: /tmp/ldifs
             volumes:
               - name: data
                 persistentVolumeClaim:
                   claimName: ldap-pvc
+              - name: config
+                configMap:
+                  name: ldap-isvd-config
               - name: ldifs
                 configMap:
                   name: ldap-seed-ldifs
