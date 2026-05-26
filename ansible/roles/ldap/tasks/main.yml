@@ -270,6 +270,7 @@
 - name: Deploy ISVD LDAP
   kubernetes.core.k8s:
     state: present
+    apply: true
     definition:
       apiVersion: apps/v1
       kind: Deployment
