@@ -227,6 +227,7 @@
       data:
         config.yaml: |
           general:
+            id: "idsldap"
             admin:
               dn: "cn=root"
               pwd: "$ISVD_ADMIN_PWD"

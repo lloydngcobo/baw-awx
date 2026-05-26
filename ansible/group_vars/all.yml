@@ -59,7 +59,7 @@ ldap_bind_password: "Password1"    # REQUIRED
 ldap_user_base:     "ou=dev,dc=demodom,dc=nl"
 ldap_group_base:    "ou=dev,dc=demodom,dc=nl"
 ldap_admin_user:    "bawadmin"
-ldap_admin_password:  "Password1"  # REQUIRED — password for all LDAP users
+ldap_admin_password:  "Password12" # REQUIRED — min 2 non-alpha chars (ISVD policy)
 ldap_isvd_license_key: ""          # REQUIRED — set in AWX survey (never commit the real key)
 
 # =============================================================================
