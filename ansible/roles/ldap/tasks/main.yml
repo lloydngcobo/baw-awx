@@ -338,7 +338,8 @@
                         -b "{{ ldap_base_dn }}" -s base > /dev/null 2>&1
                   initialDelaySeconds: 90
                   periodSeconds: 15
-                  failureThreshold: 8
+                  timeoutSeconds: 10
+                  failureThreshold: 5
                 readinessProbe:
                   exec:
                     command:
@@ -351,6 +352,7 @@
                         -b "{{ ldap_base_dn }}" -s base > /dev/null 2>&1
                   initialDelaySeconds: 60
                   periodSeconds: 15
+                  timeoutSeconds: 10
                   failureThreshold: 12
                 volumeMounts:
                   - name: data
