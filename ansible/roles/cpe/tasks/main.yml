@@ -198,6 +198,7 @@
 - name: Deploy CPE
   kubernetes.core.k8s:
     state: present
+    apply: true
     definition:
       apiVersion: apps/v1
       kind: Deployment
@@ -208,6 +209,7 @@
           app: baw-cpe
       spec:
         replicas: 1
+        progressDeadlineSeconds: 960
         selector:
           matchLabels:
             app: baw-cpe
