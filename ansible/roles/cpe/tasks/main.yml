@@ -224,6 +224,21 @@
               runAsUser: 1000140000
               fsGroup: 1000140000
             initContainers:
+              # Downloads the PostgreSQL JDBC driver (not bundled in the CPE image)
+              # into an emptyDir that is mounted into the main container at the
+              # Liberty shared-resources path referenced by db-datasources.xml.
+              - name: cpe-init-jdbc
+                image: busybox
+                command:
+                  - sh
+                  - -c
+                  - >-
+                    wget -q -O /jdbc-target/postgresql.jar
+                    https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar
+                    && echo "JDBC driver downloaded OK"
+                volumeMounts:
+                  - name: jdbc-drivers
+                    mountPath: /jdbc-target
               - name: cpe-init-permissions
                 image: busybox
                 command:
@@ -305,6 +320,9 @@
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/FileNet
                   - name: logs
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/logs
+                  # PostgreSQL JDBC driver — populated by cpe-init-jdbc init container
+                  - name: jdbc-drivers
+                    mountPath: /opt/ibm/wlp/usr/shared/resources/db/postgres
                   # Mount each Liberty override file individually (subPath) so the
                   # overrides directory stays writable — CPE startup script checks it.
                   - name: liberty-config
@@ -325,6 +343,8 @@
               - name: logs
                 persistentVolumeClaim:
                   claimName: cpe-logs-pvc
+              - name: jdbc-drivers
+                emptyDir: {}
               - name: liberty-config
                 configMap:
                   name: cpe-liberty-config
