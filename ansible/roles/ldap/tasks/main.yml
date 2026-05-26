@@ -288,6 +288,18 @@
           spec:
             securityContext:
               fsGroup: 1000
+            initContainers:
+              - name: isvd-config-init
+                image: busybox
+                command:
+                  - sh
+                  - -c
+                  - cp /isvd-init-config/config.yaml /var/isvd/config.yaml && chmod 644 /var/isvd/config.yaml
+                volumeMounts:
+                  - name: data
+                    mountPath: /var/isvd
+                  - name: config
+                    mountPath: /isvd-init-config
             containers:
               - name: ldap
                 image: "{{ ldap_image }}"
@@ -339,9 +351,6 @@
                 volumeMounts:
                   - name: data
                     mountPath: /var/isvd
-                  - name: config
-                    mountPath: /var/isvd/config.yaml
-                    subPath: config.yaml
                   - name: ldifs
                     mountPath: /tmp/ldifs
             volumes:
