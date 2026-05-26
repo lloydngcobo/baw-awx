@@ -29,6 +29,7 @@
       when: ocp_token | length > 0
       changed_when: false
       no_log: true
+      tags: always
 
     - name: Log in to OpenShift (AWX K8S_AUTH_* env vars)
       ansible.builtin.shell: >
@@ -41,16 +42,19 @@
         - lookup('env', 'K8S_AUTH_API_KEY') | length > 0
       changed_when: false
       no_log: true
+      tags: always
 
     - name: Verify oc login
       ansible.builtin.shell: oc whoami
       register: oc_whoami
       changed_when: false
       failed_when: oc_whoami.rc != 0
+      tags: always
 
     - name: Display active user
       ansible.builtin.debug:
         msg: "Authenticated as: {{ oc_whoami.stdout }}"
+      tags: always
 
     - name: Auto-detect cluster ingress domain
       ansible.builtin.shell: >
@@ -59,6 +63,7 @@
       register: _ingress_domain
       changed_when: false
       when: cluster_ingress_domain | length == 0
+      tags: always
 
     - name: Set effective ingress domain
       ansible.builtin.set_fact:
@@ -66,10 +71,12 @@
           {{ cluster_ingress_domain
              if cluster_ingress_domain | length > 0
              else _ingress_domain.stdout | trim }}
+      tags: always
 
     - name: Set effective BAW hostname
       ansible.builtin.set_fact:
         baw_hostname: "{{ baw_subdomain }}.{{ effective_ingress_domain }}"
+      tags: always
 
     - name: Display deployment target
       ansible.builtin.debug:
@@ -78,11 +85,13 @@
           - "Ingress  : {{ effective_ingress_domain }}"
           - "BAW host : {{ baw_hostname }}"
           - "Namespaces: {{ baw_namespace }}, {{ infra_namespace }}"
+      tags: always
 
     - name: Warn if IBM entitlement key is empty
       ansible.builtin.debug:
         msg: "WARNING: ibm_entitlement_key is not set — image pulls from cp.icr.io will fail."
       when: ibm_entitlement_key | length == 0
+      tags: always
 
   roles:
     # Step 1 — Namespaces, SCCs, pull secrets
