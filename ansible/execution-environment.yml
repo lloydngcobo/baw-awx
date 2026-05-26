@@ -1,0 +1,76 @@
+---
+# =============================================================================
+# Custom Ansible Execution Environment — IBM BAW Automation
+# =============================================================================
+# Extends quay.io/ansible/awx-ee with:
+#   - oc CLI       (for oc exec, oc rollout, oc adm, oc wait, oc get, etc.)
+#   - openssl      (for certificate generation in the certificates role)
+#   - ldap-utils   (for ldapadd/ldapsearch in the ldap role)
+#   - awx.awx      (for awx-bootstrap.yml)
+#
+# Build:
+#   pip install ansible-builder
+#   ansible-builder build -t baw-ee:latest -f ansible/execution-environment.yml
+#
+# Test locally:
+#   docker run --rm baw-ee:latest oc version --client
+#   docker run --rm baw-ee:latest openssl version
+#   docker run --rm baw-ee:latest ldapsearch --help
+#   docker run --rm baw-ee:latest ansible --version
+#
+# Push and register in AWX:
+#   docker tag baw-ee:latest ghcr.io/lloydngcobo/baw-ee:latest
+#   docker push ghcr.io/lloydngcobo/baw-ee:latest
+#   # Then register via awx-bootstrap.yml or AWX UI:
+#   #   Administration → Execution Environments → Add
+#   #   Name: baw-ee   Image: ghcr.io/lloydngcobo/baw-ee:latest
+# =============================================================================
+
+version: 3
+
+images:
+  base_image:
+    name: quay.io/ansible/awx-ee:latest
+
+dependencies:
+  ansible_core:
+    package_pip: ansible-core>=2.15.0
+
+  ansible_runner:
+    package_pip: ansible-runner>=2.4.0
+
+  galaxy:
+    collections:
+      - name: awx.awx
+        version: ">=23.0.0"
+      - name: kubernetes.core
+        version: ">=2.4.0"
+      - name: ansible.posix
+        version: ">=1.5.0"
+      # community.crypto provides certificate modules (alternative to openssl CLI)
+      - name: community.crypto
+        version: ">=2.15.0"
+
+  python:
+    - kubernetes>=24.2.0
+    - jinja2>=3.1.0
+    - cryptography>=41.0.0
+
+  exclude:
+    python:
+      - openshift
+      - ovirt-imageio
+      - ovirt-engine-sdk-python
+
+additional_build_steps:
+  prepend_final:
+    # Install oc CLI (OpenShift client)
+    - >-
+      RUN curl -fsSL
+      https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz
+      | tar -xz -C /usr/local/bin oc kubectl
+      && oc version --client
+    # Install ldap-utils for ldapadd/ldapsearch used in the ldap role
+    - >-
+      RUN microdnf install -y openldap-clients
+      && microdnf clean all

@@ -1,0 +1,439 @@
+---
+# =============================================================================
+# AWX Bootstrap Playbook — IBM BAW Automation
+# =============================================================================
+# Configures AWX with all resources needed to run BAW deployments from the UI.
+#
+# Prerequisites:
+#   pip install awxkit
+#   ansible-galaxy collection install awx.awx
+#
+# Usage (run LOCALLY — not inside AWX):
+#   ansible-playbook ansible/playbooks/awx-bootstrap.yml \
+#     -e "awx_password=<admin-password>" \
+#     -e "ocp_api_token=<ocp-bearer-token>"
+#
+# What is created in AWX:
+#   Organization : BAW Automation
+#   EE           : baw-ee  (custom EE with oc + openssl)
+#   Project      : baw-awx (GitHub repo)
+#   Credential   : OpenShift API (K8s bearer token)
+#   Inventory    : BAW Localhost
+#   Job Templates:
+#     - BAW Full Install       (site.yml, all steps 1-12)
+#     - BAW Prereqs Only       (site.yml --tags prereqs, steps 1-4)
+#     - BAW Teardown           (playbooks/teardown.yml)
+#     - BAW Configure ArgoCD   (site.yml --tags argocd)
+#   Workflow     : BAW Full Deploy (Prereqs → Approval → Full Deploy → ArgoCD)
+# =============================================================================
+
+- name: AWX Bootstrap — Configure AWX for BAW Automation
+  hosts: localhost
+  gather_facts: false
+  connection: local
+
+  vars:
+    # ── AWX Connection ──────────────────────────────────────────────────────
+    awx_url:      "http://localhost:30980"
+    awx_username: "admin"
+    awx_password: ""        # REQUIRED: pass via -e "awx_password=<pw>"
+
+    # ── OCP Credential ──────────────────────────────────────────────────────
+    ocp_api_url:   "https://api.homelab.home.nl:6443"
+    ocp_api_token: ""       # REQUIRED: pass via -e "ocp_api_token=<token>"
+
+    # ── GitHub Repo ─────────────────────────────────────────────────────────
+    github_repo_url: "https://github.com/lloydngcobo/baw-awx"
+    github_branch:   "main"
+
+    # ── Custom EE image ─────────────────────────────────────────────────────
+    # Build: ansible-builder build -t baw-ee:latest -f ansible/execution-environment.yml
+    # Push:  docker tag baw-ee:latest ghcr.io/lloydngcobo/baw-ee:latest && docker push ...
+    baw_ee_image: "ghcr.io/lloydngcobo/baw-ee:latest"
+
+    # ── AWX resource names ──────────────────────────────────────────────────
+    awx_org_name:       "BAW Automation"
+    awx_project_name:   "baw-awx"
+    awx_inventory_name: "BAW Localhost"
+    awx_ee_name:        "baw-ee"
+    awx_ocp_cred_name:  "OpenShift API"
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - awx_password | length > 0
+          - ocp_api_token | length > 0
+        fail_msg: "Pass required vars: -e 'awx_password=<pw> ocp_api_token=<token>'"
+
+  tasks:
+    # ── Organization ──────────────────────────────────────────────────────────
+
+    - name: Create organization '{{ awx_org_name }}'
+      awx.awx.organization:
+        name: "{{ awx_org_name }}"
+        description: "IBM Business Automation Workflow Automation"
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+
+    # ── Custom Execution Environment ──────────────────────────────────────────
+
+    - name: Register custom EE '{{ awx_ee_name }}'
+      awx.awx.execution_environment:
+        name: "{{ awx_ee_name }}"
+        image: "{{ baw_ee_image }}"
+        pull: missing
+        description: "BAW EE: oc CLI, openssl, kubernetes.core, awx.awx"
+        organization: "{{ awx_org_name }}"
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+
+    # ── Project ────────────────────────────────────────────────────────────────
+
+    - name: Create project '{{ awx_project_name }}'
+      awx.awx.project:
+        name: "{{ awx_project_name }}"
+        description: "IBM BAW automated deployment playbooks"
+        organization: "{{ awx_org_name }}"
+        scm_type: git
+        scm_url: "{{ github_repo_url }}"
+        scm_branch: "{{ github_branch }}"
+        scm_update_on_launch: true
+        scm_clean: false
+        default_environment: "{{ awx_ee_name }}"
+        wait: false
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+
+    - name: Wait for project sync
+      awx.awx.project_update:
+        project: "{{ awx_project_name }}"
+        organization: "{{ awx_org_name }}"
+        wait: true
+        interval: 5
+        timeout: 120
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+      ignore_errors: true
+
+    # ── OpenShift Credential ──────────────────────────────────────────────────
+
+    - name: Create OpenShift API credential
+      awx.awx.credential:
+        name: "{{ awx_ocp_cred_name }}"
+        description: "Bearer token for api.homelab.home.nl:6443"
+        organization: "{{ awx_org_name }}"
+        credential_type: "OpenShift or Kubernetes API Bearer Token"
+        inputs:
+          host: "{{ ocp_api_url }}"
+          bearer_token: "{{ ocp_api_token }}"
+          verify_ssl: false
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+
+    # ── Inventory ──────────────────────────────────────────────────────────────
+
+    - name: Create inventory '{{ awx_inventory_name }}'
+      awx.awx.inventory:
+        name: "{{ awx_inventory_name }}"
+        description: "Localhost — Ansible runs locally inside the EE"
+        organization: "{{ awx_org_name }}"
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+
+    - name: Add localhost to inventory
+      awx.awx.host:
+        name: localhost
+        inventory: "{{ awx_inventory_name }}"
+        variables:
+          ansible_connection: local
+          ansible_python_interpreter: "{{ '{{' }} ansible_playbook_python {{ '}}' }}"
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+
+    # ── Job Templates ──────────────────────────────────────────────────────────
+
+    - name: Create job template — BAW Full Install
+      awx.awx.job_template:
+        name: "BAW Full Install"
+        description: "Full BAW deployment: namespaces, certs, PostgreSQL, LDAP, CPE, ICN, UMS, BAStudio (steps 1-12)"
+        organization: "{{ awx_org_name }}"
+        project: "{{ awx_project_name }}"
+        playbook: "ansible/site.yml"
+        inventory: "{{ awx_inventory_name }}"
+        execution_environment: "{{ awx_ee_name }}"
+        credentials:
+          - "{{ awx_ocp_cred_name }}"
+        ask_variables_on_launch: true
+        survey_enabled: true
+        survey_spec:
+          name: "BAW Full Install Survey"
+          description: ""
+          spec:
+            - question_name: "IBM Entitlement Key"
+              question_description: "From https://myibm.ibm.com/products-services/containerlibrary"
+              variable: ibm_entitlement_key
+              type: password
+              required: true
+              default: ""
+            - question_name: "Storage Class"
+              question_description: "RWX-capable StorageClass name"
+              variable: storage_class_name
+              type: text
+              required: true
+              default: "nfs-homelab"
+            - question_name: "BAW Namespace"
+              variable: baw_namespace
+              type: text
+              required: true
+              default: "baw"
+            - question_name: "Infra Namespace"
+              variable: infra_namespace
+              type: text
+              required: true
+              default: "infra"
+            - question_name: "PostgreSQL Admin Password"
+              variable: postgres_admin_password
+              type: password
+              required: true
+              default: ""
+            - question_name: "LDAP Admin Password"
+              variable: ldap_admin_password
+              type: password
+              required: true
+              default: ""
+            - question_name: "CPE Admin Password"
+              variable: cpe_admin_password
+              type: password
+              required: true
+              default: ""
+            - question_name: "Keystore Password (PKCS12)"
+              variable: keystore_password
+              type: password
+              required: true
+              default: ""
+            - question_name: "UMS Admin Password"
+              variable: ums_admin_password
+              type: password
+              required: true
+              default: ""
+            - question_name: "BAW License"
+              variable: baw_license
+              type: multiplechoice
+              choices: "FNCM.PVUNonProd\nFNCM.PVUProd\nFNCM.UVU\nFNCM.CU"
+              required: true
+              default: "FNCM.PVUNonProd"
+            - question_name: "Deploy BAW Runtime?"
+              variable: deploy_baw_runtime
+              type: multiplechoice
+              choices: "false\ntrue"
+              required: true
+              default: "false"
+            - question_name: "Configure ArgoCD GitOps?"
+              variable: configure_argocd
+              type: multiplechoice
+              choices: "false\ntrue"
+              required: true
+              default: "false"
+            - question_name: "ArgoCD GitOps Repo URL"
+              question_description: "Leave blank to skip ArgoCD Application creation"
+              variable: argocd_gitops_repo_url
+              type: text
+              required: false
+              default: "https://github.com/lloydngcobo/baw-gitops"
+        extra_vars:
+          ocp_api_url: "{{ ocp_api_url }}"
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+
+    - name: Create job template — BAW Prereqs Only
+      awx.awx.job_template:
+        name: "BAW Prereqs Only"
+        description: "Deploy infra only: namespaces, certs, PostgreSQL, LDAP (steps 1-4, tags prereqs)"
+        organization: "{{ awx_org_name }}"
+        project: "{{ awx_project_name }}"
+        playbook: "ansible/site.yml"
+        job_tags: "prereqs"
+        inventory: "{{ awx_inventory_name }}"
+        execution_environment: "{{ awx_ee_name }}"
+        credentials:
+          - "{{ awx_ocp_cred_name }}"
+        ask_variables_on_launch: true
+        survey_enabled: false
+        extra_vars:
+          ocp_api_url: "{{ ocp_api_url }}"
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+
+    - name: Create job template — BAW Teardown
+      awx.awx.job_template:
+        name: "BAW Teardown"
+        description: "Remove all BAW namespaces and resources from OpenShift"
+        organization: "{{ awx_org_name }}"
+        project: "{{ awx_project_name }}"
+        playbook: "ansible/playbooks/teardown.yml"
+        inventory: "{{ awx_inventory_name }}"
+        execution_environment: "{{ awx_ee_name }}"
+        credentials:
+          - "{{ awx_ocp_cred_name }}"
+        ask_variables_on_launch: false
+        survey_enabled: true
+        survey_spec:
+          name: "BAW Teardown Survey"
+          description: ""
+          spec:
+            - question_name: "Confirm teardown (type 'yes' to proceed)"
+              variable: confirm
+              type: text
+              required: true
+              default: "yes"
+        extra_vars:
+          ocp_api_url: "{{ ocp_api_url }}"
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+
+    - name: Create job template — BAW Configure ArgoCD
+      awx.awx.job_template:
+        name: "BAW Configure ArgoCD"
+        description: "Configure ArgoCD GitOps Application for BAW (tag argocd)"
+        organization: "{{ awx_org_name }}"
+        project: "{{ awx_project_name }}"
+        playbook: "ansible/site.yml"
+        job_tags: "argocd"
+        inventory: "{{ awx_inventory_name }}"
+        execution_environment: "{{ awx_ee_name }}"
+        credentials:
+          - "{{ awx_ocp_cred_name }}"
+        ask_variables_on_launch: true
+        survey_enabled: true
+        survey_spec:
+          name: "BAW Configure ArgoCD Survey"
+          description: ""
+          spec:
+            - question_name: "ArgoCD GitOps Repo URL"
+              variable: argocd_gitops_repo_url
+              type: text
+              required: true
+              default: "https://github.com/lloydngcobo/baw-gitops"
+            - question_name: "ArgoCD GitOps Repo Path"
+              variable: argocd_gitops_repo_path
+              type: text
+              required: true
+              default: "manifests"
+            - question_name: "Enable Auto-Sync?"
+              variable: argocd_auto_sync
+              type: multiplechoice
+              choices: "false\ntrue"
+              required: true
+              default: "false"
+        extra_vars:
+          ocp_api_url: "{{ ocp_api_url }}"
+          configure_argocd: true
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+
+    # ── Workflow ───────────────────────────────────────────────────────────────
+
+    - name: Create workflow — BAW Full Deploy
+      awx.awx.workflow_job_template:
+        name: "BAW Full Deploy"
+        description: >
+          End-to-end BAW deployment workflow:
+          Prereqs → Approval Gate → Full Install → ArgoCD (optional)
+        organization: "{{ awx_org_name }}"
+        survey_enabled: false
+        ask_variables_on_launch: true
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+
+    - name: Add workflow nodes — Prereqs → Approval → Full Install → ArgoCD
+      awx.awx.workflow_job_template_node:
+        workflow_job_template: "BAW Full Deploy"
+        organization: "{{ awx_org_name }}"
+        identifier: "{{ item.id }}"
+        unified_job_template: "{{ item.template | default(omit) }}"
+        approval_node: "{{ item.approval | default(omit) }}"
+        all_parents_must_converge: false
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+      loop:
+        - id: "node-prereqs"
+          template: "BAW Prereqs Only"
+        - id: "node-approval"
+          approval: true
+        - id: "node-install"
+          template: "BAW Full Install"
+        - id: "node-argocd"
+          template: "BAW Configure ArgoCD"
+
+    # ── Summary ────────────────────────────────────────────────────────────────
+
+    - name: AWX Bootstrap summary
+      ansible.builtin.debug:
+        msg:
+          - "================================================"
+          - "  AWX Bootstrap Complete — BAW Automation"
+          - "================================================"
+          - ""
+          - "  AWX URL      : {{ awx_url }}"
+          - "  Organization : {{ awx_org_name }}"
+          - ""
+          - "  Created:"
+          - "    Project      : {{ awx_project_name }} ({{ github_repo_url }})"
+          - "    Inventory    : {{ awx_inventory_name }}"
+          - "    Credential   : {{ awx_ocp_cred_name }}"
+          - "    EE           : {{ awx_ee_name }} ({{ baw_ee_image }})"
+          - ""
+          - "  Job Templates:"
+          - "    - BAW Full Install"
+          - "    - BAW Prereqs Only"
+          - "    - BAW Teardown"
+          - "    - BAW Configure ArgoCD"
+          - ""
+          - "  Workflow:"
+          - "    - BAW Full Deploy (Prereqs → Approval → Full Install → ArgoCD)"
+          - ""
+          - "  Next steps:"
+          - "    1. Build and push custom EE:"
+          - "       ansible-builder build -t {{ baw_ee_image }} -f ansible/execution-environment.yml"
+          - "       docker push {{ baw_ee_image }}"
+          - "    2. Open {{ awx_url }} → Templates → BAW Full Install"
+          - "    3. Click Launch, fill survey (IBM entitlement key required)"

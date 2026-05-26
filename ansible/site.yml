@@ -1,0 +1,170 @@
+---
+# =============================================================================
+# IBM Business Automation Workflow (BAW) — Automated Deployment
+# =============================================================================
+# Prerequisites:
+#   pip install ansible-core kubernetes jinja2 cryptography
+#   ansible-galaxy collection install kubernetes.core community.crypto ansible.posix
+#   oc login <cluster>  (or set ocp_token in group_vars/all.yml)
+#
+# Usage:
+#   ansible-playbook -i inventory.yml site.yml                         # full deploy
+#   ansible-playbook -i inventory.yml site.yml --tags prereqs          # infra only
+#   ansible-playbook -i inventory.yml site.yml --tags step3            # filenet only
+#   ansible-playbook -i inventory.yml site.yml --tags bastudio,argocd  # BAS + ArgoCD
+#   ansible-playbook -i inventory.yml site.yml --skip-tags step1,step2 # resume from step 3
+#   ansible-playbook -i inventory.yml site.yml --check                 # dry run
+# =============================================================================
+
+- name: IBM BAW Automated Deployment
+  hosts: localhost
+  gather_facts: false
+
+  pre_tasks:
+    - name: Log in to OpenShift (ocp_token variable)
+      ansible.builtin.shell: >
+        oc login --server={{ ocp_api_url }}
+        --token={{ ocp_token }}
+        --insecure-skip-tls-verify
+      when: ocp_token | length > 0
+      changed_when: false
+      no_log: true
+
+    - name: Log in to OpenShift (AWX K8S_AUTH_* env vars)
+      ansible.builtin.shell: >
+        oc login
+        --server={{ lookup('env', 'K8S_AUTH_HOST') | default(ocp_api_url, true) }}
+        --token={{ lookup('env', 'K8S_AUTH_API_KEY') }}
+        --insecure-skip-tls-verify
+      when:
+        - ocp_token | length == 0
+        - lookup('env', 'K8S_AUTH_API_KEY') | length > 0
+      changed_when: false
+      no_log: true
+
+    - name: Verify oc login
+      ansible.builtin.shell: oc whoami
+      register: oc_whoami
+      changed_when: false
+      failed_when: oc_whoami.rc != 0
+
+    - name: Display active user
+      ansible.builtin.debug:
+        msg: "Authenticated as: {{ oc_whoami.stdout }}"
+
+    - name: Auto-detect cluster ingress domain
+      ansible.builtin.shell: >
+        oc get ingresses.config.openshift.io cluster
+        -o jsonpath='{.spec.domain}'
+      register: _ingress_domain
+      changed_when: false
+      when: cluster_ingress_domain | length == 0
+
+    - name: Set effective ingress domain
+      ansible.builtin.set_fact:
+        effective_ingress_domain: >-
+          {{ cluster_ingress_domain
+             if cluster_ingress_domain | length > 0
+             else _ingress_domain.stdout | trim }}
+
+    - name: Set effective BAW hostname
+      ansible.builtin.set_fact:
+        baw_hostname: "{{ baw_subdomain }}.{{ effective_ingress_domain }}"
+
+    - name: Display deployment target
+      ansible.builtin.debug:
+        msg:
+          - "Cluster  : {{ ocp_api_url }}"
+          - "Ingress  : {{ effective_ingress_domain }}"
+          - "BAW host : {{ baw_hostname }}"
+          - "Namespaces: {{ baw_namespace }}, {{ infra_namespace }}"
+
+    - name: Warn if IBM entitlement key is empty
+      ansible.builtin.debug:
+        msg: "WARNING: ibm_entitlement_key is not set — image pulls from cp.icr.io will fail."
+      when: ibm_entitlement_key | length == 0
+
+  roles:
+    # Step 1 — Namespaces, SCCs, pull secrets
+    - role: namespaces
+      tags: [namespaces, step1, prereqs]
+
+    # Step 2 — TLS certificates (Root CA + route cert + shared pod cert)
+    - role: certificates
+      tags: [certificates, step2, prereqs]
+
+    # Step 3 — PostgreSQL (infra namespace)
+    - role: postgresql
+      tags: [postgresql, step3, prereqs]
+
+    # Step 4 — LDAP / ISVD (infra namespace)
+    - role: ldap
+      tags: [ldap, step4, prereqs]
+
+    # Step 5 — FileNet CPE (baw namespace)
+    - role: cpe
+      tags: [cpe, step5, filenet]
+
+    # Step 6 — IBM Content Navigator (optional)
+    - role: icn
+      tags: [icn, step6, filenet]
+      when: deploy_icn | default(true) | bool
+
+    # Step 7 — GraphQL API (optional)
+    - role: graphql
+      tags: [graphql, step7]
+      when: deploy_graphql | default(true) | bool
+
+    # Step 8 — UMS / Identity (required for BAStudio)
+    - role: ums
+      tags: [ums, step8]
+      when: deploy_ums | default(true) | bool
+
+    # Step 9 — OpenShift Routes (passthrough TLS)
+    - role: routes
+      tags: [routes, step9]
+
+    # Step 10 — BAStudio authoring (jobs + deployment)
+    - role: bastudio
+      tags: [bastudio, step10]
+      when: deploy_bastudio | default(true) | bool
+
+    # Step 11 — BAW Runtime standalone (optional)
+    - role: baw_runtime
+      tags: [baw_runtime, step11]
+      when: deploy_baw_runtime | default(false) | bool
+
+    # Step 12 — ArgoCD GitOps (optional)
+    - role: argocd
+      tags: [argocd, step12]
+      when: configure_argocd | default(false) | bool
+
+  post_tasks:
+    - name: List all routes
+      ansible.builtin.shell: oc get routes -n {{ baw_namespace }} --no-headers
+      register: _routes
+      changed_when: false
+      failed_when: false
+
+    - name: Deployment summary
+      ansible.builtin.debug:
+        msg:
+          - "================================================"
+          - "  IBM BAW Deployment Complete"
+          - "================================================"
+          - ""
+          - "  Cluster  : {{ ocp_api_url }}"
+          - "  BAW host : https://{{ baw_hostname }}"
+          - ""
+          - "  Access URLs:"
+          - "    BAStudio     : https://{{ baw_hostname }}/bas/CaseManager"
+          - "    ICN          : https://{{ baw_hostname }}/navigator/"
+          - "    CPE          : https://{{ baw_hostname }}/acce/"
+          - "    GraphQL      : https://{{ baw_hostname }}/content-services-graphql/"
+          - "    UMS          : https://{{ baw_hostname }}/ums/"
+          - ""
+          - "  Default credentials: bawadmin / {{ ldap_admin_password }}"
+          - "  FileNet admin     : p8admin / {{ cpe_admin_password }}"
+          - ""
+          - "  Routes:"
+          - "{{ _routes.stdout_lines | to_nice_yaml }}"

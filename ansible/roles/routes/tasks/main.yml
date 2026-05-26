@@ -1,0 +1,189 @@
+---
+# Role: routes
+# Creates OpenShift passthrough TLS Routes for all BAW services.
+# All routes land on baw_hostname (baw.apps.homelab.home.nl) with path-based routing.
+# Services use passthrough termination — pods handle TLS themselves.
+#
+# Route layout:
+#   /acce/                       → cpe-svc:9443
+#   /navigator/                  → icn-svc:9443       (when deploy_icn)
+#   /content-services-graphql/   → graphql-svc:9443   (when deploy_graphql)
+#   /ums/                        → ums-svc:9443        (when deploy_ums)
+#   /bas/                        → bastudio-svc:9443   (when deploy_bastudio)
+#   /baw/                        → baw-runtime-svc:9443 (when deploy_baw_runtime)
+
+- name: Create CPE ACCE route
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: cpe-route
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+      spec:
+        host: "{{ baw_hostname }}"
+        path: /acce
+        port:
+          targetPort: https
+        tls:
+          termination: passthrough
+          insecureEdgeTerminationPolicy: Redirect
+        to:
+          kind: Service
+          name: cpe-svc
+
+- name: Create CPE WSI route
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: cpe-wsi-route
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+      spec:
+        host: "{{ baw_hostname }}"
+        path: /wsi
+        port:
+          targetPort: https
+        tls:
+          termination: passthrough
+          insecureEdgeTerminationPolicy: Redirect
+        to:
+          kind: Service
+          name: cpe-svc
+
+- name: Create ICN Navigator route
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: icn-route
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+      spec:
+        host: "{{ baw_hostname }}"
+        path: /navigator
+        port:
+          targetPort: https
+        tls:
+          termination: passthrough
+          insecureEdgeTerminationPolicy: Redirect
+        to:
+          kind: Service
+          name: icn-svc
+  when: deploy_icn | default(true) | bool
+
+- name: Create GraphQL route
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: graphql-route
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+      spec:
+        host: "{{ baw_hostname }}"
+        path: /content-services-graphql
+        port:
+          targetPort: https
+        tls:
+          termination: passthrough
+          insecureEdgeTerminationPolicy: Redirect
+        to:
+          kind: Service
+          name: graphql-svc
+  when: deploy_graphql | default(true) | bool
+
+- name: Create UMS route
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: ums-route
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+      spec:
+        host: "{{ baw_hostname }}"
+        path: /ums
+        port:
+          targetPort: https
+        tls:
+          termination: passthrough
+          insecureEdgeTerminationPolicy: Redirect
+        to:
+          kind: Service
+          name: ums-svc
+  when: deploy_ums | default(true) | bool
+
+- name: Create BAStudio route
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: bastudio-route
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+      spec:
+        host: "{{ baw_hostname }}"
+        path: /bas
+        port:
+          targetPort: https
+        tls:
+          termination: passthrough
+          insecureEdgeTerminationPolicy: Redirect
+        to:
+          kind: Service
+          name: bastudio-svc
+  when: deploy_bastudio | default(true) | bool
+
+- name: Create BAW Runtime route
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: baw-runtime-route
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+      spec:
+        host: "{{ baw_hostname }}"
+        path: /baw
+        port:
+          targetPort: https
+        tls:
+          termination: passthrough
+          insecureEdgeTerminationPolicy: Redirect
+        to:
+          kind: Service
+          name: baw-runtime-svc
+  when: deploy_baw_runtime | default(false) | bool
+
+- name: Routes summary
+  ansible.builtin.debug:
+    msg:
+      - "Routes created on host: {{ baw_hostname }}"
+      - "  CPE ACCE   : https://{{ baw_hostname }}/acce/"
+      - "  ICN        : https://{{ baw_hostname }}/navigator/"
+      - "  GraphQL    : https://{{ baw_hostname }}/content-services-graphql/"
+      - "  UMS        : https://{{ baw_hostname }}/ums/"
+      - "  BAStudio   : https://{{ baw_hostname }}/bas/"

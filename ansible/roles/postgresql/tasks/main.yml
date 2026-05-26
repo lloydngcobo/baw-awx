@@ -1,0 +1,327 @@
+---
+# Role: postgresql
+# Deploys PostgreSQL 16 (RHEL image) into the infra namespace.
+# Creates all BAW databases: GCD, DOCS, DOS, TOS, ICN, BAS, BAW Runtime, AAE.
+# All SQL is executed inside the pod — idempotent (skips existing databases).
+
+- name: Create PostgreSQL config Secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: postgres-secret
+        namespace: "{{ infra_namespace }}"
+        labels:
+          app: baw-postgresql
+      stringData:
+        POSTGRESQL_USER:     "{{ postgres_admin_user }}"
+        POSTGRESQL_PASSWORD: "{{ postgres_admin_password }}"
+        POSTGRESQL_DATABASE: "{{ postgres_db }}"
+  no_log: true
+
+- name: Create PostgreSQL data PVC
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: postgres-pvc
+        namespace: "{{ infra_namespace }}"
+        labels:
+          app: baw-postgresql
+      spec:
+        accessModes: [ReadWriteMany]
+        resources:
+          requests:
+            storage: 20Gi
+        storageClassName: "{{ storage_class_name }}"
+
+- name: Deploy PostgreSQL
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: postgresql
+        namespace: "{{ infra_namespace }}"
+        labels:
+          app: baw-postgresql
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: baw-postgresql
+        template:
+          metadata:
+            labels:
+              app: baw-postgresql
+          spec:
+            securityContext:
+              fsGroup: 26
+            containers:
+              - name: postgresql
+                image: "{{ postgresql_image }}"
+                imagePullPolicy: IfNotPresent
+                securityContext:
+                  privileged: true
+                ports:
+                  - containerPort: 5432
+                envFrom:
+                  - secretRef:
+                      name: postgres-secret
+                env:
+                  - name: POSTGRESQL_MAX_PREPARED_TRANSACTIONS
+                    value: "100"
+                  - name: POSTGRESQL_MAX_CONNECTIONS
+                    value: "200"
+                  - name: TZ
+                    value: "{{ timezone }}"
+                resources:
+                  requests:
+                    memory: 512Mi
+                    cpu: 500m
+                  limits:
+                    memory: 1Gi
+                    cpu: "1"
+                livenessProbe:
+                  exec:
+                    command: ["/bin/sh", "-c", "pg_isready -U $POSTGRESQL_USER -d $POSTGRESQL_DATABASE"]
+                  initialDelaySeconds: 30
+                  periodSeconds: 10
+                  failureThreshold: 6
+                readinessProbe:
+                  exec:
+                    command: ["/bin/sh", "-c", "pg_isready -U $POSTGRESQL_USER -d $POSTGRESQL_DATABASE"]
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+                  failureThreshold: 6
+                startupProbe:
+                  exec:
+                    command: ["/bin/sh", "-c", "pg_isready -U $POSTGRESQL_USER -d $POSTGRESQL_DATABASE"]
+                  periodSeconds: 10
+                  failureThreshold: 18
+                volumeMounts:
+                  - name: data
+                    mountPath: /var/lib/pgsql/data
+            volumes:
+              - name: data
+                persistentVolumeClaim:
+                  claimName: postgres-pvc
+
+- name: Create PostgreSQL Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: postgres-svc
+        namespace: "{{ infra_namespace }}"
+        labels:
+          app: baw-postgresql
+      spec:
+        selector:
+          app: baw-postgresql
+        ports:
+          - port: 5432
+            targetPort: 5432
+
+- name: Wait for PostgreSQL deployment
+  ansible.builtin.shell: >
+    oc rollout status deployment/postgresql
+    -n {{ infra_namespace }} --timeout=300s
+  changed_when: false
+
+- name: Get PostgreSQL pod name
+  ansible.builtin.shell: >
+    oc get pod -n {{ infra_namespace }} -l app=baw-postgresql
+    -o jsonpath='{.items[0].metadata.name}'
+  register: _pg_pod
+  changed_when: false
+
+# ── Database creation (idempotent) ────────────────────────────────────────────
+# All databases use tablespace directories under /var/lib/pgsql/data/<db_name>
+# SQL is inlined so no file copy is needed.
+
+- name: Create GCD database
+  ansible.builtin.shell: |
+    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
+      psql -U {{ postgres_admin_user }} -d {{ postgres_db }} -tc \
+        \"SELECT 1 FROM pg_database WHERE datname='{{ gcd_db_name }}'\" \
+        | grep -q 1 && echo 'EXISTS' || (
+        mkdir -p /var/lib/pgsql/data/{{ gcd_db_name }}
+        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} <<'EOSQL'
+    CREATE ROLE {{ gcd_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ gcd_db_pass }}';
+    CREATE TABLESPACE {{ gcd_db_name }}_tbs OWNER {{ gcd_db_user }}
+      LOCATION '/var/lib/pgsql/data/{{ gcd_db_name }}';
+    CREATE DATABASE {{ gcd_db_name }} OWNER {{ gcd_db_user }}
+      TABLESPACE {{ gcd_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
+    GRANT ALL ON DATABASE {{ gcd_db_name }} TO {{ gcd_db_user }};
+    EOSQL
+        echo 'CREATED')"
+  register: _gcd
+  changed_when: "'CREATED' in _gcd.stdout"
+  no_log: true
+
+- name: Create DOCS object store database
+  ansible.builtin.shell: |
+    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
+      psql -U {{ postgres_admin_user }} -d {{ postgres_db }} -tc \
+        \"SELECT 1 FROM pg_database WHERE datname='{{ docs_db_name }}'\" \
+        | grep -q 1 && echo 'EXISTS' || (
+        mkdir -p /var/lib/pgsql/data/{{ docs_db_name }}/data
+        mkdir -p /var/lib/pgsql/data/{{ docs_db_name }}/index
+        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} <<'EOSQL'
+    CREATE ROLE {{ docs_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ docs_db_pass }}';
+    CREATE TABLESPACE {{ docs_db_name }}_tbs OWNER {{ docs_db_user }}
+      LOCATION '/var/lib/pgsql/data/{{ docs_db_name }}/data';
+    CREATE DATABASE {{ docs_db_name }} OWNER {{ docs_db_user }}
+      TABLESPACE {{ docs_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
+    GRANT ALL ON DATABASE {{ docs_db_name }} TO {{ docs_db_user }};
+    EOSQL
+        echo 'CREATED')"
+  register: _docs
+  changed_when: "'CREATED' in _docs.stdout"
+  no_log: true
+
+- name: Create DOS object store database
+  ansible.builtin.shell: |
+    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
+      psql -U {{ postgres_admin_user }} -d {{ postgres_db }} -tc \
+        \"SELECT 1 FROM pg_database WHERE datname='{{ dos_db_name }}'\" \
+        | grep -q 1 && echo 'EXISTS' || (
+        mkdir -p /var/lib/pgsql/data/{{ dos_db_name }}/data
+        mkdir -p /var/lib/pgsql/data/{{ dos_db_name }}/index
+        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} <<'EOSQL'
+    CREATE ROLE {{ dos_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ dos_db_pass }}';
+    CREATE TABLESPACE {{ dos_db_name }}_tbs OWNER {{ dos_db_user }}
+      LOCATION '/var/lib/pgsql/data/{{ dos_db_name }}/data';
+    CREATE DATABASE {{ dos_db_name }} OWNER {{ dos_db_user }}
+      TABLESPACE {{ dos_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
+    GRANT ALL ON DATABASE {{ dos_db_name }} TO {{ dos_db_user }};
+    EOSQL
+        echo 'CREATED')"
+  register: _dos
+  changed_when: "'CREATED' in _dos.stdout"
+  no_log: true
+
+- name: Create TOS object store database
+  ansible.builtin.shell: |
+    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
+      psql -U {{ postgres_admin_user }} -d {{ postgres_db }} -tc \
+        \"SELECT 1 FROM pg_database WHERE datname='{{ tos_db_name }}'\" \
+        | grep -q 1 && echo 'EXISTS' || (
+        mkdir -p /var/lib/pgsql/data/{{ tos_db_name }}/data
+        mkdir -p /var/lib/pgsql/data/{{ tos_db_name }}/index
+        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} <<'EOSQL'
+    CREATE ROLE {{ tos_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ tos_db_pass }}';
+    CREATE TABLESPACE {{ tos_db_name }}_tbs OWNER {{ tos_db_user }}
+      LOCATION '/var/lib/pgsql/data/{{ tos_db_name }}/data';
+    CREATE DATABASE {{ tos_db_name }} OWNER {{ tos_db_user }}
+      TABLESPACE {{ tos_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
+    GRANT ALL ON DATABASE {{ tos_db_name }} TO {{ tos_db_user }};
+    EOSQL
+        echo 'CREATED')"
+  register: _tos
+  changed_when: "'CREATED' in _tos.stdout"
+  no_log: true
+
+- name: Create ICN database
+  ansible.builtin.shell: |
+    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
+      psql -U {{ postgres_admin_user }} -d {{ postgres_db }} -tc \
+        \"SELECT 1 FROM pg_database WHERE datname='{{ icn_db_name }}'\" \
+        | grep -q 1 && echo 'EXISTS' || (
+        mkdir -p /var/lib/pgsql/data/{{ icn_db_name }}
+        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} <<'EOSQL'
+    CREATE ROLE {{ icn_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ icn_db_pass }}';
+    CREATE TABLESPACE {{ icn_db_name }}_tbs OWNER {{ icn_db_user }}
+      LOCATION '/var/lib/pgsql/data/{{ icn_db_name }}';
+    CREATE DATABASE {{ icn_db_name }} OWNER {{ icn_db_user }}
+      TABLESPACE {{ icn_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
+    GRANT ALL ON DATABASE {{ icn_db_name }} TO {{ icn_db_user }};
+    \c {{ icn_db_name }}
+    CREATE SCHEMA IF NOT EXISTS icn_schema AUTHORIZATION {{ icn_db_user }};
+    ALTER DATABASE {{ icn_db_name }} SET search_path TO icn_schema;
+    EOSQL
+        echo 'CREATED')"
+  register: _icn
+  changed_when: "'CREATED' in _icn.stdout"
+  no_log: true
+  when: deploy_icn | default(true) | bool
+
+- name: Create BAStudio (BAS) authoring database
+  ansible.builtin.shell: |
+    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
+      psql -U {{ postgres_admin_user }} -d {{ postgres_db }} -tc \
+        \"SELECT 1 FROM pg_database WHERE datname='{{ bas_db_name }}'\" \
+        | grep -q 1 && echo 'EXISTS' || (
+        mkdir -p /var/lib/pgsql/data/{{ bas_db_name }}
+        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} <<'EOSQL'
+    CREATE ROLE {{ bas_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ bas_db_pass }}';
+    CREATE TABLESPACE {{ bas_db_name }}_tbs OWNER {{ bas_db_user }}
+      LOCATION '/var/lib/pgsql/data/{{ bas_db_name }}';
+    CREATE DATABASE {{ bas_db_name }} OWNER {{ bas_db_user }}
+      TABLESPACE {{ bas_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
+    GRANT ALL ON DATABASE {{ bas_db_name }} TO {{ bas_db_user }};
+    EOSQL
+        echo 'CREATED')"
+  register: _bas
+  changed_when: "'CREATED' in _bas.stdout"
+  no_log: true
+  when: deploy_bastudio | default(true) | bool
+
+- name: Create BAW Runtime databases
+  ansible.builtin.shell: |
+    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
+      psql -U {{ postgres_admin_user }} -d {{ postgres_db }} -tc \
+        \"SELECT 1 FROM pg_database WHERE datname='{{ item.db }}'\" \
+        | grep -q 1 && echo 'EXISTS' || (
+        mkdir -p /var/lib/pgsql/data/{{ item.db }}
+        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} <<EOSQL
+    CREATE ROLE {{ item.user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ item.pass }}';
+    CREATE TABLESPACE {{ item.db }}_tbs OWNER {{ item.user }}
+      LOCATION '/var/lib/pgsql/data/{{ item.db }}';
+    CREATE DATABASE {{ item.db }} OWNER {{ item.user }}
+      TABLESPACE {{ item.db }}_tbs TEMPLATE template0 ENCODING UTF8;
+    GRANT ALL ON DATABASE {{ item.db }} TO {{ item.user }};
+    EOSQL
+        echo 'CREATED')"
+  register: _baw_rt
+  changed_when: "'CREATED' in _baw_rt.stdout"
+  no_log: true
+  loop:
+    - { db: "{{ baw_rt_db_name }}",  user: "{{ baw_rt_db_user }}",  pass: "{{ baw_rt_db_pass }}" }
+    - { db: "{{ baw_pdw_db_name }}", user: "{{ baw_pdw_db_user }}", pass: "{{ baw_pdw_db_pass }}" }
+  when: deploy_baw_runtime | default(false) | bool
+
+- name: Create App Engine database
+  ansible.builtin.shell: |
+    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
+      psql -U {{ postgres_admin_user }} -d {{ postgres_db }} -tc \
+        \"SELECT 1 FROM pg_database WHERE datname='{{ aae_db_name }}'\" \
+        | grep -q 1 && echo 'EXISTS' || (
+        mkdir -p /var/lib/pgsql/data/{{ aae_db_name }}
+        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} <<'EOSQL'
+    CREATE ROLE {{ aae_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ aae_db_pass }}';
+    CREATE TABLESPACE {{ aae_db_name }}_tbs OWNER {{ aae_db_user }}
+      LOCATION '/var/lib/pgsql/data/{{ aae_db_name }}';
+    CREATE DATABASE {{ aae_db_name }} OWNER {{ aae_db_user }}
+      TABLESPACE {{ aae_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
+    GRANT ALL ON DATABASE {{ aae_db_name }} TO {{ aae_db_user }};
+    EOSQL
+        echo 'CREATED')"
+  register: _aae
+  changed_when: "'CREATED' in _aae.stdout"
+  no_log: true
+  when: deploy_app_engine | default(false) | bool
+
+- name: PostgreSQL summary
+  ansible.builtin.debug:
+    msg:
+      - "PostgreSQL ready at {{ postgres_host }}:{{ postgres_port }}"
+      - "Databases created: {{ gcd_db_name }}, {{ docs_db_name }}, {{ dos_db_name }}, {{ tos_db_name }}, {{ icn_db_name }}, {{ bas_db_name }}"

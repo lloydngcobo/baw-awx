@@ -1,0 +1,373 @@
+---
+# Role: ums
+# Deploys IBM User Management Service (UMS) 25.0.1 in the baw namespace.
+# UMS is the OIDC identity provider for BAStudio, BAW, and App Engine.
+# Registers OIDC clients: bastudio, baw-ae, psliberty.
+# Connects to LDAP (ISVD) for user authentication.
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+
+- name: Create UMS credentials Secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ums-secret
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-ums
+      stringData:
+        UMS_ADMIN_USER:              "{{ ums_admin_user }}"
+        UMS_ADMIN_PASSWORD:          "{{ ums_admin_password }}"
+        LDAP_BIND_PASSWORD:          "{{ ldap_bind_password }}"
+        KEYSTORE_PASSWORD:           "{{ keystore_password }}"
+        LTPA_PASSWORD:               "{{ ltpa_password }}"
+        UMS_INTERNAL_CLIENT_SECRET:  "{{ ums_internal_client_secret }}"
+        UMS_API_CLIENT_SECRET:       "{{ ums_api_client_secret }}"
+        BASTUDIO_OIDC_CLIENT_SECRET: "{{ bastudio_oidc_client_secret }}"
+        CLIENT_MANAGER_PASSWORD:     "{{ ums_client_manager_pass }}"
+        SCIM_READER_PASSWORD:        "{{ ums_scim_reader_pass }}"
+  no_log: true
+
+# ── UMS Liberty server config ─────────────────────────────────────────────────
+
+- name: Create UMS config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ums-config
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-ums
+      data:
+        ums.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <featureManager>
+              <feature>ums-1.0</feature>
+              <feature>openidConnectServer-1.0</feature>
+              <feature>ldapRegistry-3.0</feature>
+              <feature>ssl-1.0</feature>
+            </featureManager>
+
+            <oidcProvider id="UMS"
+              issuerIdentifier="https://{{ baw_hostname }}/ums"
+              signatureAlgorithm="RS256"
+              jwkEnabled="true"
+              tokenEndpointAuthMethod="client_secret_post">
+              <authorizationEndpointUrl>https://{{ baw_hostname }}/ums/sps/oauth/oauth20/authorize</authorizationEndpointUrl>
+              <tokenEndpointUrl>https://{{ baw_hostname }}/ums/sps/oauth/oauth20/token</tokenEndpointUrl>
+            </oidcProvider>
+
+            <oauth-roles>
+              <authenticated>
+                <special-subject type="ALL_AUTHENTICATED_USERS"/>
+              </authenticated>
+            </oauth-roles>
+
+            <oauthProvider id="UMSOAuthProvider"
+              oauthProviderRef="UMS"
+              allowPublicClients="false">
+              <databaseStore dataSourceRef="UMSOAuthDS"/>
+            </oauthProvider>
+          </server>
+
+        ldap-registry.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <ldapRegistry id="LDAPUserRegistry"
+              realm="defaultWIMFileBasedRealm"
+              host="{{ ldap_host }}"
+              port="{{ ldap_port }}"
+              baseDN="{{ ldap_base_dn }}"
+              bindDN="{{ ldap_bind_dn }}"
+              bindPassword="${env.LDAP_BIND_PASSWORD}"
+              ldapType="Custom">
+              <ldapEntityType name="PersonAccount">
+                <rdnProperty name="uid"/>
+                <objectClass>inetOrgPerson</objectClass>
+              </ldapEntityType>
+              <ldapEntityType name="Group">
+                <rdnProperty name="cn"/>
+                <objectClass>groupOfNames</objectClass>
+                <memberAttribute name="member"/>
+              </ldapEntityType>
+              <userFilter
+                filter="(&amp;(uid=%v)(objectclass=inetOrgPerson))"/>
+              <groupFilter
+                filter="(&amp;(cn=%v)(objectclass=groupOfNames))"/>
+              <userIdMap filter="uid"/>
+              <groupIdMap filter="cn"/>
+              <groupMemberIdMap filter="member"/>
+            </ldapRegistry>
+          </server>
+
+        ssl-config.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <keyStore id="defaultKeyStore"
+              location="/shared/tls/pkcs12/server.p12"
+              password="${env.KEYSTORE_PASSWORD}"
+              type="PKCS12"/>
+            <keyStore id="defaultTrustStore"
+              location="/shared/tls/pkcs12/trusts.p12"
+              password="${env.KEYSTORE_PASSWORD}"
+              type="PKCS12"/>
+            <ssl id="defaultSSLConfig"
+              keyStoreRef="defaultKeyStore"
+              trustStoreRef="defaultTrustStore"
+              sslProtocol="TLSv1.2"/>
+            <sslDefault sslRef="defaultSSLConfig"/>
+          </server>
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+
+- name: Create UMS data PVC
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: ums-pvc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-ums
+      spec:
+        accessModes: [ReadWriteMany]
+        resources:
+          requests:
+            storage: 5Gi
+        storageClassName: "{{ storage_class_name }}"
+
+# ── Deployment ────────────────────────────────────────────────────────────────
+
+- name: Deploy UMS
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ums
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-ums
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: baw-ums
+        template:
+          metadata:
+            labels:
+              app: baw-ums
+          spec:
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+            securityContext:
+              runAsUser: 1000140000
+              fsGroup: 1000140000
+            containers:
+              - name: ums
+                image: "{{ ums_image }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - containerPort: 9080
+                    name: http
+                  - containerPort: 9443
+                    name: https
+                envFrom:
+                  - secretRef:
+                      name: ums-secret
+                env:
+                  - name: UMS_HOST
+                    value: "{{ baw_hostname }}"
+                  - name: UMS_LDAP_HOST
+                    value: "{{ ldap_host }}"
+                  - name: UMS_LDAP_PORT
+                    value: "{{ ldap_port }}"
+                  - name: UMS_LDAP_BASE_DN
+                    value: "{{ ldap_base_dn }}"
+                  - name: TZ
+                    value: "{{ timezone }}"
+                  - name: JVM_HEAP_XMS
+                    value: "512m"
+                  - name: JVM_HEAP_XMX
+                    value: "1024m"
+                resources:
+                  requests:
+                    memory: 512Mi
+                    cpu: 250m
+                  limits:
+                    memory: 2Gi
+                    cpu: "1"
+                livenessProbe:
+                  httpGet:
+                    path: /ums/health
+                    port: 9080
+                    scheme: HTTP
+                  initialDelaySeconds: 90
+                  periodSeconds: 30
+                  failureThreshold: 8
+                readinessProbe:
+                  httpGet:
+                    path: /ums/health
+                    port: 9080
+                    scheme: HTTP
+                  initialDelaySeconds: 60
+                  periodSeconds: 15
+                  failureThreshold: 12
+                startupProbe:
+                  httpGet:
+                    path: /ums/health
+                    port: 9080
+                    scheme: HTTP
+                  periodSeconds: 15
+                  failureThreshold: 30
+                volumeMounts:
+                  - name: data
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/apps
+                  - name: config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides
+                  - name: tls
+                    mountPath: /shared/tls/pkcs12
+            volumes:
+              - name: data
+                persistentVolumeClaim:
+                  claimName: ums-pvc
+              - name: config
+                configMap:
+                  name: ums-config
+              - name: tls
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: server.p12
+                      path: server.p12
+                    - key: trusts.p12
+                      path: trusts.p12
+
+# ── Service ───────────────────────────────────────────────────────────────────
+
+- name: Create UMS Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ums-svc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-ums
+      spec:
+        selector:
+          app: baw-ums
+        ports:
+          - port: 9080
+            targetPort: 9080
+            name: http
+          - port: 9443
+            targetPort: 9443
+            name: https
+
+# ── Wait ──────────────────────────────────────────────────────────────────────
+
+- name: Wait for UMS deployment
+  ansible.builtin.shell: >
+    oc rollout status deployment/ums
+    -n {{ baw_namespace }} --timeout={{ pod_ready_timeout }}s
+  changed_when: false
+
+- name: Get UMS pod name
+  ansible.builtin.shell: >
+    oc get pod -n {{ baw_namespace }} -l app=baw-ums
+    -o jsonpath='{.items[0].metadata.name}'
+  register: _ums_pod
+  changed_when: false
+
+- name: Wait for UMS health endpoint
+  ansible.builtin.shell: >
+    oc exec -n {{ baw_namespace }} {{ _ums_pod.stdout }} --
+    curl -sk -o /dev/null -w "%{http_code}"
+    https://localhost:9443/ums/health
+  register: _ums_health
+  until: _ums_health.stdout == '200'
+  retries: 20
+  delay: 15
+  changed_when: false
+
+# ── OIDC client registration ──────────────────────────────────────────────────
+# Registers the BAStudio OIDC client in UMS via its admin REST API.
+# Idempotent: checks before creating.
+
+- name: Check if BAStudio OIDC client already registered
+  ansible.builtin.shell: |
+    oc exec -n {{ baw_namespace }} {{ _ums_pod.stdout }} --
+    curl -sk -u {{ ums_client_manager_user }}:{{ ums_client_manager_pass }}
+    "https://localhost:9443/oidc/endpoint/UMS/registration/bastudio"
+    -w "\n%{http_code}" 2>&1 | tail -1
+  register: _bastudio_client_check
+  changed_when: false
+  no_log: true
+
+- name: Register BAStudio OIDC client
+  ansible.builtin.shell: |
+    oc exec -n {{ baw_namespace }} {{ _ums_pod.stdout }} --
+    curl -sk -u {{ ums_client_manager_user }}:{{ ums_client_manager_pass }}
+    -X POST "https://localhost:9443/oidc/endpoint/UMS/registration"
+    -H "Content-Type: application/json"
+    -d '{
+      "client_id": "bastudio",
+      "client_secret": "{{ bastudio_oidc_client_secret }}",
+      "client_name": "BAStudio",
+      "redirect_uris": [
+        "https://{{ baw_hostname }}/bas/redirect_uri",
+        "https://{{ baw_hostname }}/bas/jsp/logoutCallback.jsp"
+      ],
+      "grant_types": ["authorization_code","refresh_token","client_credentials"],
+      "response_types": ["code"],
+      "token_endpoint_auth_method": "client_secret_post",
+      "scope": "openid profile email"
+    }' 2>&1
+  register: _bastudio_client_reg
+  changed_when: true
+  no_log: true
+  when: _bastudio_client_check.stdout != '200'
+
+- name: Register PSLiberty OIDC client
+  ansible.builtin.shell: |
+    oc exec -n {{ baw_namespace }} {{ _ums_pod.stdout }} --
+    curl -sk -u {{ ums_client_manager_user }}:{{ ums_client_manager_pass }}
+    -X POST "https://localhost:9443/oidc/endpoint/UMS/registration"
+    -H "Content-Type: application/json"
+    -d '{
+      "client_id": "psliberty",
+      "client_secret": "{{ ums_internal_client_secret }}",
+      "client_name": "PSLiberty",
+      "redirect_uris": ["https://{{ baw_hostname }}/bas/redirect_uri"],
+      "grant_types": ["authorization_code","refresh_token","client_credentials","password"],
+      "response_types": ["code"],
+      "token_endpoint_auth_method": "client_secret_post",
+      "scope": "openid profile email"
+    }' 2>&1
+  register: _psliberty_reg
+  changed_when: true
+  failed_when: >
+    _psliberty_reg.rc != 0 and
+    'already exists' not in _psliberty_reg.stdout | lower
+  no_log: true
+
+- name: UMS summary
+  ansible.builtin.debug:
+    msg:
+      - "UMS ready at https://ums-svc.{{ baw_namespace }}.svc.cluster.local:9443"
+      - "UMS URL         : https://{{ baw_hostname }}/ums/"
+      - "OIDC issuer     : https://{{ baw_hostname }}/ums"
+      - "OIDC clients    : bastudio, psliberty"

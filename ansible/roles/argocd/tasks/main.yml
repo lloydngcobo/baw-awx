@@ -1,0 +1,209 @@
+---
+# Role: argocd
+# Configures OpenShift GitOps (ArgoCD) to track the BAW deployment.
+# Creates an ArgoCD Application that watches baw + infra namespaces
+# in the lloydngcobo/baw-gitops repository.
+# Only runs when configure_argocd: true.
+
+- name: Skip if ArgoCD not enabled
+  ansible.builtin.debug:
+    msg: "ArgoCD configuration skipped (configure_argocd=false). Set configure_argocd=true to enable."
+  when: not configure_argocd | bool
+
+- name: End role if ArgoCD not enabled
+  ansible.builtin.meta: end_host
+  when: not configure_argocd | bool
+
+# ── Verify ArgoCD instance ────────────────────────────────────────────────────
+
+- name: Wait for ArgoCD instance to be Available
+  kubernetes.core.k8s_info:
+    api_version: argoproj.io/v1alpha1
+    kind: ArgoCD
+    name: openshift-gitops
+    namespace: "{{ argocd_namespace }}"
+  register: _argocd_instance
+  retries: 20
+  delay: 15
+  until: >
+    _argocd_instance.resources | length > 0 and
+    (_argocd_instance.resources[0].status.phase | default('')) == 'Available'
+
+- name: Assert ArgoCD is Available
+  ansible.builtin.assert:
+    that:
+      - _argocd_instance.resources | length > 0
+      - _argocd_instance.resources[0].status.phase == 'Available'
+    fail_msg: >
+      ArgoCD instance not found or not Available in {{ argocd_namespace }}.
+      Ensure OpenShift GitOps operator is installed:
+        oc get subscription openshift-gitops-operator -n openshift-operators
+
+# ── Retrieve ArgoCD URL + password ───────────────────────────────────────────
+
+- name: Get ArgoCD server route
+  ansible.builtin.shell: >
+    oc get route openshift-gitops-server -n {{ argocd_namespace }}
+    -o jsonpath='{.spec.host}'
+  register: _argocd_route
+  changed_when: false
+  failed_when: false
+
+- name: Set ArgoCD URL
+  ansible.builtin.set_fact:
+    argocd_url: "{{ 'https://' + _argocd_route.stdout if _argocd_route.rc == 0 else '<route not found>' }}"
+
+- name: Fetch ArgoCD admin secret
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: openshift-gitops-cluster
+    namespace: "{{ argocd_namespace }}"
+  register: _argocd_secret
+
+- name: Decode ArgoCD admin password
+  ansible.builtin.set_fact:
+    _argocd_admin_password: >-
+      {{ _argocd_secret.resources[0].data['admin.password'] | b64decode
+         if _argocd_secret.resources | length > 0
+         else '<check secret openshift-gitops-cluster>' }}
+
+# ── Grant ArgoCD controller access to baw + infra namespaces ─────────────────
+
+- name: Grant ArgoCD controller admin access to baw namespace
+  ansible.builtin.shell: >
+    oc adm policy add-role-to-user admin
+    system:serviceaccount:{{ argocd_namespace }}:openshift-gitops-argocd-application-controller
+    -n {{ baw_namespace }}
+  changed_when: false
+  failed_when: false
+
+- name: Grant ArgoCD controller admin access to infra namespace
+  ansible.builtin.shell: >
+    oc adm policy add-role-to-user admin
+    system:serviceaccount:{{ argocd_namespace }}:openshift-gitops-argocd-application-controller
+    -n {{ infra_namespace }}
+  changed_when: false
+  failed_when: false
+
+# ── Create ArgoCD Application ─────────────────────────────────────────────────
+
+- name: Skip Application creation (no repo URL configured)
+  ansible.builtin.debug:
+    msg: "No argocd_gitops_repo_url set — skipping Application. Set argocd_gitops_repo_url to enable."
+  when: argocd_gitops_repo_url | length == 0
+
+- name: Build syncPolicy
+  ansible.builtin.set_fact:
+    _argocd_sync_policy: >-
+      {{
+        {
+          'retry': {
+            'limit': 5,
+            'backoff': {'duration': '5s', 'factor': 2, 'maxDuration': '3m'}
+          },
+          'syncOptions': [
+            'CreateNamespace=false',
+            'ApplyOutOfSyncOnly=true',
+            'ServerSideApply=true'
+          ]
+        } | combine(
+          {'automated': {'prune': argocd_prune | bool, 'selfHeal': argocd_self_heal | bool}}
+          if argocd_auto_sync | bool else {}
+        )
+      }}
+  when: argocd_gitops_repo_url | length > 0
+
+- name: Create ArgoCD Application for BAW
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: argoproj.io/v1alpha1
+      kind: Application
+      metadata:
+        name: "{{ argocd_app_name }}"
+        namespace: "{{ argocd_namespace }}"
+        finalizers:
+          - resources-finalizer.argocd.argoproj.io
+        labels:
+          baw.ibm.com/managed-by: baw-ansible-automation
+      spec:
+        project: default
+        source:
+          repoURL: "{{ argocd_gitops_repo_url }}"
+          targetRevision: "{{ argocd_gitops_revision }}"
+          path: "{{ argocd_gitops_repo_path }}"
+        destination:
+          server: https://kubernetes.default.svc
+          namespace: "{{ baw_namespace }}"
+        ignoreDifferences:
+          - group: apps
+            kind: Deployment
+            jsonPointers:
+              - /metadata/annotations
+              - /metadata/generation
+              - /metadata/resourceVersion
+        syncPolicy: "{{ _argocd_sync_policy }}"
+  when: argocd_gitops_repo_url | length > 0
+
+# ── Hard refresh ──────────────────────────────────────────────────────────────
+
+- name: Hard-refresh ArgoCD Application
+  ansible.builtin.shell: >
+    oc annotate application {{ argocd_app_name }}
+    argocd.argoproj.io/refresh=hard
+    -n {{ argocd_namespace }}
+    --overwrite
+  changed_when: false
+  failed_when: false
+  when: argocd_gitops_repo_url | length > 0
+
+# ── Export live manifests to local GitOps repo ────────────────────────────────
+
+- name: Ensure local GitOps manifest directory exists
+  ansible.builtin.file:
+    path: "{{ argocd_gitops_local_repo_path }}/{{ argocd_gitops_repo_path }}"
+    state: directory
+    mode: "0755"
+  when: argocd_gitops_repo_url | length > 0
+
+- name: Export baw namespace resource list
+  ansible.builtin.shell: >
+    oc get all,configmap,secret,pvc,route
+    -n {{ baw_namespace }}
+    -o yaml --export 2>/dev/null ||
+    oc get all,configmap,pvc,route -n {{ baw_namespace }} -o yaml
+  register: _baw_resources
+  changed_when: false
+  failed_when: false
+  when: argocd_gitops_repo_url | length > 0
+
+- name: Write BAW namespace manifest snapshot
+  ansible.builtin.copy:
+    content: "{{ _baw_resources.stdout }}"
+    dest: "{{ argocd_gitops_local_repo_path }}/{{ argocd_gitops_repo_path }}/baw-resources.yaml"
+    mode: "0644"
+  when:
+    - argocd_gitops_repo_url | length > 0
+    - _baw_resources.stdout | length > 0
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+
+- name: ArgoCD summary
+  ansible.builtin.debug:
+    msg:
+      - "================================================"
+      - "  ArgoCD GitOps Configuration Complete"
+      - "================================================"
+      - ""
+      - "  ArgoCD UI   : {{ argocd_url }}"
+      - "  Login       : admin / {{ _argocd_admin_password }}"
+      - ""
+      - "  Application : {{ argocd_app_name }}"
+      - "  Repository  : {{ argocd_gitops_repo_url }}"
+      - "  Path        : {{ argocd_gitops_repo_path }}"
+      - "  Auto-sync   : {{ argocd_auto_sync }}"
+      - ""
+      - "  Check sync status:"
+      - "    oc get application {{ argocd_app_name }} -n {{ argocd_namespace }}"
+  when: argocd_gitops_repo_url | length > 0

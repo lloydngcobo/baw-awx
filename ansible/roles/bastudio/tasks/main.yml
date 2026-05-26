@@ -1,0 +1,641 @@
+---
+# Role: bastudio
+# Deploys IBM BAStudio (Business Automation Studio) workflow authoring environment.
+# Requires: CPE, ICN, UMS all running.
+#
+# Job sequence (must complete in order):
+#   1. bastudio-bootstrap     — initializes BAStudio DB and UMS registration
+#   2. bastudio-content-init  — creates FileNet object stores for BAStudio
+#   3. bastudio deployment    — Liberty server serving /bas/
+#   4. bastudio-workplace-init — configures Workplace XT
+#   5. bastudio-case-init     — initializes IBM Case Manager
+#
+# NOTE: ICN is restarted after bootstrap to pick up new desktop configurations.
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+
+- name: Create BAStudio credentials Secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: bastudio-secret
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-bastudio
+      stringData:
+        BAS_ADMIN_USER:              "{{ ums_admin_user }}"
+        BAS_ADMIN_PASSWORD:          "{{ ums_admin_password }}"
+        CPE_ADMIN_USER:              "{{ cpe_admin_user }}"
+        CPE_ADMIN_PASSWORD:          "{{ cpe_admin_password }}"
+        BAS_DB_USER:                 "{{ bas_db_user }}"
+        BAS_DB_PASS:                 "{{ bas_db_pass }}"
+        LDAP_BIND_PASSWORD:          "{{ ldap_bind_password }}"
+        KEYSTORE_PASSWORD:           "{{ keystore_password }}"
+        LTPA_PASSWORD:               "{{ ltpa_password }}"
+        UMS_INTERNAL_CLIENT_SECRET:  "{{ ums_internal_client_secret }}"
+        BASTUDIO_OIDC_CLIENT_SECRET: "{{ bastudio_oidc_client_secret }}"
+  no_log: true
+
+# ── Liberty server config ─────────────────────────────────────────────────────
+
+- name: Create BAStudio Liberty config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: bastudio-liberty-config
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-bastudio
+      data:
+        db-datasources.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <library id="PostgreSQLLib">
+              <fileset dir="/opt/ibm/wlp/usr/shared/resources/db/postgres"
+                       includes="*.jar"/>
+            </library>
+
+            <dataSource id="BASStudioDS" jndiName="jdbc/BAStudioDS"
+                        type="javax.sql.XADataSource">
+              <jdbcDriver libraryRef="PostgreSQLLib"/>
+              <properties.postgresql
+                serverName="{{ postgres_host }}"
+                portNumber="{{ postgres_port }}"
+                databaseName="{{ bas_db_name }}"
+                user="${env.BAS_DB_USER}"
+                password="${env.BAS_DB_PASS}"/>
+              <connectionManager maxPoolSize="20" minPoolSize="1"/>
+            </dataSource>
+          </server>
+
+        ldap-registry.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <ldapRegistry id="LDAPUserRegistry"
+              realm="defaultWIMFileBasedRealm"
+              host="{{ ldap_host }}"
+              port="{{ ldap_port }}"
+              baseDN="{{ ldap_base_dn }}"
+              bindDN="{{ ldap_bind_dn }}"
+              bindPassword="${env.LDAP_BIND_PASSWORD}"
+              ldapType="Custom">
+              <ldapEntityType name="PersonAccount">
+                <rdnProperty name="uid"/>
+                <objectClass>inetOrgPerson</objectClass>
+              </ldapEntityType>
+              <ldapEntityType name="Group">
+                <rdnProperty name="cn"/>
+                <objectClass>groupOfNames</objectClass>
+                <memberAttribute name="member"/>
+              </ldapEntityType>
+              <userFilter
+                filter="(&amp;(uid=%v)(objectclass=inetOrgPerson))"/>
+              <groupFilter
+                filter="(&amp;(cn=%v)(objectclass=groupOfNames))"/>
+              <userIdMap filter="uid"/>
+              <groupIdMap filter="cn"/>
+              <groupMemberIdMap filter="member"/>
+            </ldapRegistry>
+          </server>
+
+        ssl-config.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <keyStore id="defaultKeyStore"
+              location="/shared/tls/pkcs12/server.p12"
+              password="${env.KEYSTORE_PASSWORD}"
+              type="PKCS12"/>
+            <keyStore id="defaultTrustStore"
+              location="/shared/tls/pkcs12/trusts.p12"
+              password="${env.KEYSTORE_PASSWORD}"
+              type="PKCS12"/>
+            <ssl id="defaultSSLConfig"
+              keyStoreRef="defaultKeyStore"
+              trustStoreRef="defaultTrustStore"
+              sslProtocol="TLSv1.2"/>
+            <sslDefault sslRef="defaultSSLConfig"/>
+          </server>
+
+        oidc-client.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <openidConnectClient id="BAStudioOIDC"
+              clientId="bastudio"
+              clientSecret="${env.BASTUDIO_OIDC_CLIENT_SECRET}"
+              discoveryEndpointUrl="https://{{ baw_hostname }}/ums/oidc/endpoint/UMS/.well-known/openid-configuration"
+              scope="openid profile email"
+              redirectToRPHostAndPort="https://{{ baw_hostname }}"
+              httpsRequired="true"
+              trustAliasName="baw-server"
+              sslRef="defaultSSLConfig"/>
+          </server>
+
+# ── BAStudio bootstrap ConfigMap ──────────────────────────────────────────────
+# Contains environment config for the bootstrap Job.
+
+- name: Create BAStudio bootstrap ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: bastudio-bootstrap-config
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-bastudio
+      data:
+        UMS_HOST:       "https://{{ baw_hostname }}/ums"
+        CPE_HOST:       "https://{{ cpe_host }}:{{ cpe_port }}/wsi/FNCEWS40MTOM/"
+        ICN_HOST:       "https://icn-svc.{{ baw_namespace }}.svc.cluster.local:9443/navigator"
+        BAS_HOST:       "https://{{ baw_hostname }}/bas"
+        LDAP_HOST:      "{{ ldap_host }}"
+        LDAP_PORT:      "{{ ldap_port }}"
+        LDAP_BASE_DN:   "{{ ldap_base_dn }}"
+        LDAP_BIND_DN:   "{{ ldap_bind_dn }}"
+        POSTGRES_HOST:  "{{ postgres_host }}"
+        POSTGRES_PORT:  "{{ postgres_port }}"
+        BAS_DB_NAME:    "{{ bas_db_name }}"
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+
+- name: Create BAStudio data PVC
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: bastudio-pvc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-bastudio
+      spec:
+        accessModes: [ReadWriteMany]
+        resources:
+          requests:
+            storage: 20Gi
+        storageClassName: "{{ storage_class_name }}"
+
+- name: Create BAStudio logs PVC
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: bastudio-logs-pvc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-bastudio
+      spec:
+        accessModes: [ReadWriteMany]
+        resources:
+          requests:
+            storage: 5Gi
+        storageClassName: "{{ storage_class_name }}"
+
+# ── Step 1: Bootstrap Job ─────────────────────────────────────────────────────
+
+- name: Delete previous bootstrap Job (if any)
+  kubernetes.core.k8s:
+    state: absent
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: bastudio-bootstrap
+        namespace: "{{ baw_namespace }}"
+  ignore_errors: true
+
+- name: Run BAStudio bootstrap Job
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: bastudio-bootstrap
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-bastudio
+      spec:
+        backoffLimit: 2
+        template:
+          metadata:
+            labels:
+              app: baw-bastudio-job
+          spec:
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+            restartPolicy: Never
+            securityContext:
+              runAsUser: 1000140000
+              fsGroup: 1000140000
+            containers:
+              - name: bastudio-bootstrap
+                image: "{{ bastudio_image }}"
+                imagePullPolicy: IfNotPresent
+                command: ["/bin/sh", "-c", "/opt/ibm/scripts/bootstrap.sh"]
+                envFrom:
+                  - secretRef:
+                      name: bastudio-secret
+                  - configMapRef:
+                      name: bastudio-bootstrap-config
+                env:
+                  - name: TZ
+                    value: "{{ timezone }}"
+                volumeMounts:
+                  - name: tls
+                    mountPath: /shared/tls/pkcs12
+            volumes:
+              - name: tls
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: server.p12
+                      path: server.p12
+                    - key: trusts.p12
+                      path: trusts.p12
+
+- name: Wait for bootstrap Job to complete
+  ansible.builtin.shell: >
+    oc wait job/bastudio-bootstrap
+    -n {{ baw_namespace }}
+    --for=condition=complete
+    --timeout={{ bastudio_job_timeout }}s
+  changed_when: false
+
+# ── Restart ICN to pick up BAStudio desktop config ────────────────────────────
+
+- name: Restart ICN after bootstrap
+  ansible.builtin.shell: >
+    oc rollout restart deployment/icn -n {{ baw_namespace }}
+  changed_when: true
+
+- name: Wait for ICN to be ready after restart
+  ansible.builtin.shell: >
+    oc rollout status deployment/icn
+    -n {{ baw_namespace }} --timeout=300s
+  changed_when: false
+
+# ── Step 2: Content-init Job ──────────────────────────────────────────────────
+
+- name: Delete previous content-init Job (if any)
+  kubernetes.core.k8s:
+    state: absent
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: bastudio-content-init
+        namespace: "{{ baw_namespace }}"
+  ignore_errors: true
+
+- name: Run BAStudio content-init Job
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: bastudio-content-init
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-bastudio
+      spec:
+        backoffLimit: 2
+        template:
+          metadata:
+            labels:
+              app: baw-bastudio-job
+          spec:
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+            restartPolicy: Never
+            securityContext:
+              runAsUser: 1000140000
+              fsGroup: 1000140000
+            containers:
+              - name: bastudio-content-init
+                image: "{{ bastudio_image }}"
+                imagePullPolicy: IfNotPresent
+                command: ["/bin/sh", "-c", "/opt/ibm/scripts/content_init.sh"]
+                envFrom:
+                  - secretRef:
+                      name: bastudio-secret
+                  - configMapRef:
+                      name: bastudio-bootstrap-config
+                env:
+                  - name: TZ
+                    value: "{{ timezone }}"
+                volumeMounts:
+                  - name: tls
+                    mountPath: /shared/tls/pkcs12
+            volumes:
+              - name: tls
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: server.p12
+                      path: server.p12
+                    - key: trusts.p12
+                      path: trusts.p12
+
+- name: Wait for content-init Job to complete
+  ansible.builtin.shell: >
+    oc wait job/bastudio-content-init
+    -n {{ baw_namespace }}
+    --for=condition=complete
+    --timeout={{ bastudio_job_timeout }}s
+  changed_when: false
+
+# ── Step 3: BAStudio Deployment ───────────────────────────────────────────────
+
+- name: Deploy BAStudio
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: bastudio
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-bastudio
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: baw-bastudio
+        template:
+          metadata:
+            labels:
+              app: baw-bastudio
+          spec:
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+            securityContext:
+              runAsUser: 1000140000
+              fsGroup: 1000140000
+            containers:
+              - name: bastudio
+                image: "{{ bastudio_image }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - containerPort: 9080
+                    name: http
+                  - containerPort: 9443
+                    name: https
+                envFrom:
+                  - secretRef:
+                      name: bastudio-secret
+                  - configMapRef:
+                      name: bastudio-bootstrap-config
+                env:
+                  - name: TZ
+                    value: "{{ timezone }}"
+                  - name: JVM_HEAP_XMS
+                    value: "1024m"
+                  - name: JVM_HEAP_XMX
+                    value: "2048m"
+                resources:
+                  requests:
+                    memory: 2Gi
+                    cpu: 500m
+                  limits:
+                    memory: 4Gi
+                    cpu: "2"
+                livenessProbe:
+                  httpGet:
+                    path: /bas/health
+                    port: 9080
+                    scheme: HTTP
+                  initialDelaySeconds: 120
+                  periodSeconds: 30
+                  failureThreshold: 10
+                readinessProbe:
+                  httpGet:
+                    path: /bas/health
+                    port: 9080
+                    scheme: HTTP
+                  initialDelaySeconds: 90
+                  periodSeconds: 15
+                  failureThreshold: 20
+                startupProbe:
+                  httpGet:
+                    path: /bas/health
+                    port: 9080
+                    scheme: HTTP
+                  periodSeconds: 15
+                  failureThreshold: 60
+                volumeMounts:
+                  - name: data
+                    mountPath: /opt/ibm/bas/data
+                  - name: logs
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/logs
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides
+                  - name: tls
+                    mountPath: /shared/tls/pkcs12
+            volumes:
+              - name: data
+                persistentVolumeClaim:
+                  claimName: bastudio-pvc
+              - name: logs
+                persistentVolumeClaim:
+                  claimName: bastudio-logs-pvc
+              - name: liberty-config
+                configMap:
+                  name: bastudio-liberty-config
+              - name: tls
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: server.p12
+                      path: server.p12
+                    - key: trusts.p12
+                      path: trusts.p12
+
+- name: Create BAStudio Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: bastudio-svc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-bastudio
+      spec:
+        selector:
+          app: baw-bastudio
+        ports:
+          - port: 9080
+            targetPort: 9080
+            name: http
+          - port: 9443
+            targetPort: 9443
+            name: https
+
+- name: Wait for BAStudio deployment
+  ansible.builtin.shell: >
+    oc rollout status deployment/bastudio
+    -n {{ baw_namespace }} --timeout={{ pod_ready_timeout }}s
+  changed_when: false
+
+# ── Step 4: Workplace-init Job ────────────────────────────────────────────────
+
+- name: Delete previous workplace-init Job (if any)
+  kubernetes.core.k8s:
+    state: absent
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: bastudio-workplace-init
+        namespace: "{{ baw_namespace }}"
+  ignore_errors: true
+
+- name: Run BAStudio workplace-init Job
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: bastudio-workplace-init
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-bastudio
+      spec:
+        backoffLimit: 2
+        template:
+          metadata:
+            labels:
+              app: baw-bastudio-job
+          spec:
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+            restartPolicy: Never
+            securityContext:
+              runAsUser: 1000140000
+              fsGroup: 1000140000
+            containers:
+              - name: bastudio-workplace-init
+                image: "{{ bastudio_image }}"
+                imagePullPolicy: IfNotPresent
+                command: ["/bin/sh", "-c", "/opt/ibm/scripts/workplace_init.sh"]
+                envFrom:
+                  - secretRef:
+                      name: bastudio-secret
+                  - configMapRef:
+                      name: bastudio-bootstrap-config
+                env:
+                  - name: TZ
+                    value: "{{ timezone }}"
+                volumeMounts:
+                  - name: tls
+                    mountPath: /shared/tls/pkcs12
+            volumes:
+              - name: tls
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: server.p12
+                      path: server.p12
+                    - key: trusts.p12
+                      path: trusts.p12
+
+- name: Wait for workplace-init Job to complete
+  ansible.builtin.shell: >
+    oc wait job/bastudio-workplace-init
+    -n {{ baw_namespace }}
+    --for=condition=complete
+    --timeout={{ bastudio_job_timeout }}s
+  changed_when: false
+
+# ── Step 5: Case-init Job ─────────────────────────────────────────────────────
+
+- name: Delete previous case-init Job (if any)
+  kubernetes.core.k8s:
+    state: absent
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: bastudio-case-init
+        namespace: "{{ baw_namespace }}"
+  ignore_errors: true
+
+- name: Run BAStudio case-init Job
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: bastudio-case-init
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-bastudio
+      spec:
+        backoffLimit: 2
+        template:
+          metadata:
+            labels:
+              app: baw-bastudio-job
+          spec:
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+            restartPolicy: Never
+            securityContext:
+              runAsUser: 1000140000
+              fsGroup: 1000140000
+            containers:
+              - name: bastudio-case-init
+                image: "{{ bastudio_image }}"
+                imagePullPolicy: IfNotPresent
+                command: ["/bin/sh", "-c", "/opt/ibm/scripts/case_init.sh"]
+                envFrom:
+                  - secretRef:
+                      name: bastudio-secret
+                  - configMapRef:
+                      name: bastudio-bootstrap-config
+                env:
+                  - name: TZ
+                    value: "{{ timezone }}"
+                volumeMounts:
+                  - name: tls
+                    mountPath: /shared/tls/pkcs12
+            volumes:
+              - name: tls
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: server.p12
+                      path: server.p12
+                    - key: trusts.p12
+                      path: trusts.p12
+
+- name: Wait for case-init Job to complete
+  ansible.builtin.shell: >
+    oc wait job/bastudio-case-init
+    -n {{ baw_namespace }}
+    --for=condition=complete
+    --timeout={{ bastudio_job_timeout }}s
+  changed_when: false
+
+- name: BAStudio summary
+  ansible.builtin.debug:
+    msg:
+      - "BAStudio ready at https://{{ baw_hostname }}/bas/"
+      - "Case Manager : https://{{ baw_hostname }}/bas/CaseManager"
+      - "Admin user   : {{ ums_admin_user }}"

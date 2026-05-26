@@ -1,0 +1,196 @@
+---
+# =============================================================================
+# IBM Business Automation Workflow (BAW) — Ansible Deployment Variables
+# =============================================================================
+# Edit ALL values below to match your environment before running site.yml.
+# Passwords marked REQUIRED must be set before running.
+
+# --- OpenShift Cluster ---
+ocp_api_url: "https://api.homelab.home.nl:6443"
+ocp_token:   ""    # Leave empty to use current 'oc login' session
+
+# --- Cluster ingress domain (auto-detected if left empty) ---
+# When empty, the roles call:
+#   oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}'
+# to derive the domain (e.g. apps.homelab.home.nl).
+# Override here only if auto-detection is not reliable in your environment.
+cluster_ingress_domain: ""
+
+# BAW hostname — constructed as baw_subdomain.cluster_ingress_domain
+# e.g. baw.apps.homelab.home.nl
+baw_subdomain: "baw"
+
+# --- Namespaces ---
+baw_namespace:   "baw"
+infra_namespace: "infra"
+
+# --- Storage ---
+storage_class_name: "nfs-homelab"
+
+# --- IBM Entitlement Key ---
+# From https://myibm.ibm.com/products-services/containerlibrary
+ibm_entitlement_key: ""    # REQUIRED
+
+# --- Images ---
+postgresql_image: "registry.redhat.io/rhel8/postgresql-16:1-44"
+ldap_image:       "icr.io/isvd/verify-directory-server:10.0.4.0"
+cpe_image:        "cp.icr.io/cp/cp4a/fncm/cpe:ga-570-p8cpe"
+icn_image:        "cp.icr.io/cp/cp4a/ban/navigator:ga-320-icn"
+graphql_image:    "cp.icr.io/cp/cp4a/fncm/graphql:ga-570-p8cgql"
+ums_image:        "cp.icr.io/cp/cp4a/ums/ums:25.0.1"
+bastudio_image:   "cp.icr.io/cp/cp4a/bas/workflow-authoring:25.0.1"
+baw_runtime_image: "cp.icr.io/cp/cp4a/bas/workflow-runtime:25.0.1"
+ae_image:         "cp.icr.io/cp/cp4a/aae/ae:25.0.1"
+odm_image:        "cp.icr.io/cp/cp4a/odm/odm:25.0.1"
+
+# --- License ---
+# Options: FNCM.PVUNonProd, FNCM.PVUProd, FNCM.UVU, FNCM.CU
+baw_license: "FNCM.PVUNonProd"
+timezone: "Europe/Amsterdam"
+
+# =============================================================================
+# LDAP (IBM Security Verify Directory Server — ISVD)
+# =============================================================================
+ldap_host:          "ldap-svc.infra.svc.cluster.local"
+ldap_port:          "9389"
+ldap_base_dn:       "dc=demodom,dc=nl"
+ldap_bind_dn:       "cn=bindldap,ou=dev,dc=demodom,dc=nl"
+ldap_bind_password: "Password1"    # REQUIRED
+ldap_user_base:     "ou=dev,dc=demodom,dc=nl"
+ldap_group_base:    "ou=dev,dc=demodom,dc=nl"
+ldap_admin_user:    "bawadmin"
+ldap_admin_password: "Password1"   # REQUIRED — password for all LDAP users
+
+# =============================================================================
+# PostgreSQL
+# =============================================================================
+postgres_host:     "postgres-svc.infra.svc.cluster.local"
+postgres_port:     "5432"
+postgres_admin_user: "admin"
+postgres_admin_password: "Password1"    # REQUIRED
+postgres_db:       "db"
+
+# FileNet databases
+gcd_db_name:  "fn_gcd_db"
+gcd_db_user:  "fn_gcd_user"
+gcd_db_pass:  "Password1"
+
+docs_db_name: "fn_docs_db"
+docs_db_user: "fn_docs_user"
+docs_db_pass: "Password1"
+
+dos_db_name:  "fn_dos_db"
+dos_db_user:  "fn_dos_user"
+dos_db_pass:  "Password1"
+
+tos_db_name:  "fn_tos_db"
+tos_db_user:  "fn_tos_user"
+tos_db_pass:  "Password1"
+
+# ICN database
+icn_db_name:  "icn_db"
+icn_db_user:  "icn_user"
+icn_db_pass:  "Password1"
+
+# BAStudio (BAS) database
+bas_db_name:  "baw_authoring_db"
+bas_db_user:  "baw_auth_user"
+bas_db_pass:  "Password1"
+
+# BAW Runtime database (used only when deploy_baw_runtime: true)
+baw_rt_db_name: "baw_runtime_db"
+baw_rt_db_user: "baw_runtime_user"
+baw_rt_db_pass: "Password1"
+baw_pdw_db_name: "baw_pdw_db"
+baw_pdw_db_user: "baw_pdw_user"
+baw_pdw_db_pass: "Password1"
+
+# App Engine database (used only when deploy_app_engine: true)
+aae_db_name:  "ae_db"
+aae_db_user:  "ae_user"
+aae_db_pass:  "Password1"
+
+# =============================================================================
+# TLS / Certificates
+# =============================================================================
+# Generated certificates are stored at this path inside the EE and in a Secret.
+cert_work_dir: "/tmp/baw-certs"
+
+# Certificate subject fields
+cert_country:  "NL"
+cert_state:    "Demodom"
+cert_locality: "Demodom"
+cert_org:      "Homelab"
+cert_ou:       "Development"
+
+# Keystore / truststore password (used for PKCS12 files mounted by all pods)
+keystore_password: "Password1"    # REQUIRED
+
+# =============================================================================
+# CPE (FileNet Content Platform Engine)
+# =============================================================================
+cpe_host: "cpe-svc.baw.svc.cluster.local"
+cpe_port: "9443"
+cpe_admin_user: "p8admin"
+cpe_admin_password: "Password1"   # REQUIRED
+
+# =============================================================================
+# UMS (User Management Service)
+# =============================================================================
+ums_admin_user:     "bawadmin"
+ums_admin_password: "Password1"   # REQUIRED
+
+# UMS database (reuses LDAP-backed Derby by default — set to postgres to override)
+ums_oauth_db_user: "bawadmin"
+ums_oauth_db_pass: "Password1"
+ums_ts_db_user:    "bawadmin"
+ums_ts_db_pass:    "Password1"
+
+# OIDC client secrets (keep these secret in production)
+ums_internal_client_id:     "system"
+ums_internal_client_secret: "Passw0rd!"
+ums_client_manager_user:    "clientmanager"
+ums_client_manager_pass:    "Password1"
+ums_api_client_id:          "apiclient"
+ums_api_client_secret:      "Passw0rd!"
+ums_scim_reader_user:       "scimreader"
+ums_scim_reader_pass:       "Password1"
+
+# BAStudio OIDC client secret (registered in UMS)
+bastudio_oidc_client_secret: "Passw0rd!"
+
+# LTPA password
+ltpa_password: "Password1"
+
+# =============================================================================
+# Optional Components
+# =============================================================================
+deploy_icn:         true    # IBM Content Navigator
+deploy_graphql:     true    # FileNet GraphQL API
+deploy_ums:         true    # User Management Service (required for BAStudio)
+deploy_bastudio:    true    # BAStudio workflow authoring
+deploy_baw_runtime: false   # BAW standalone runtime
+deploy_app_engine:  false   # App Engine (Playback Server)
+deploy_odm:         false   # Operational Decision Manager
+
+# =============================================================================
+# Timeouts (seconds)
+# =============================================================================
+pod_ready_timeout:       600    # 10 min — standard pod readiness
+cpe_config_timeout:      900    # 15 min — CPE WSI endpoint + config scripts
+bastudio_job_timeout:    1800   # 30 min — BAS bootstrap / case-init jobs
+
+# =============================================================================
+# ArgoCD / OpenShift GitOps
+# =============================================================================
+configure_argocd: false    # set true via -e configure_argocd=true or AWX survey
+
+argocd_namespace:             "openshift-gitops"
+argocd_app_name:              "baw-deploy"
+argocd_gitops_repo_url:       "https://github.com/lloydngcobo/baw-gitops"
+argocd_gitops_repo_path:      "manifests"
+argocd_gitops_revision:       "HEAD"
+argocd_gitops_local_repo_path: "/tmp/baw-gitops"
+argocd_auto_sync:  false
+argocd_self_heal:  false
+argocd_prune:      false

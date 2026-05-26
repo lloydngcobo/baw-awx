@@ -1,0 +1,204 @@
+---
+# =============================================================================
+# IBM BAW Teardown Playbook
+# =============================================================================
+# Removes all BAW-related resources from the OpenShift cluster.
+#
+# Usage:
+#   ansible-playbook -i inventory.yml playbooks/teardown.yml
+#   ansible-playbook -i inventory.yml playbooks/teardown.yml -e "confirm=yes"
+#
+# What is removed:
+#   - ArgoCD Application (baw-deploy) from openshift-gitops namespace
+#   - baw namespace (all deployments, services, PVCs, secrets, routes, jobs)
+#   - infra namespace (PostgreSQL, LDAP + all resources)
+#   - baw-ssl-certs from openshift-config
+#   - proxy/cluster trustedCA patch (optional, --tags cleanup_trust)
+#
+# What is NOT removed:
+#   - OpenShift GitOps operator
+#   - NFS StorageClass / provisioner
+#   - Other cluster infrastructure
+#
+# Danger flag:
+#   -e "confirm=yes"   — skip the safety pause (for AWX/CI use)
+# =============================================================================
+
+- name: IBM BAW Teardown
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - "../group_vars/all.yml"
+  vars:
+    confirm: "no"
+
+  pre_tasks:
+    - name: Log in to OpenShift (ocp_token variable)
+      ansible.builtin.shell: >
+        oc login --server={{ ocp_api_url }}
+        --token={{ ocp_token }}
+        --insecure-skip-tls-verify
+      when: ocp_token | length > 0
+      changed_when: false
+      no_log: true
+
+    - name: Log in to OpenShift (AWX K8S_AUTH_* env vars)
+      ansible.builtin.shell: >
+        oc login
+        --server={{ lookup('env', 'K8S_AUTH_HOST') | default(ocp_api_url, true) }}
+        --token={{ lookup('env', 'K8S_AUTH_API_KEY') }}
+        --insecure-skip-tls-verify
+      when:
+        - ocp_token | length == 0
+        - lookup('env', 'K8S_AUTH_API_KEY') | length > 0
+      changed_when: false
+      no_log: true
+
+    - name: Verify oc login
+      ansible.builtin.shell: oc whoami
+      register: oc_whoami
+      changed_when: false
+      failed_when: oc_whoami.rc != 0
+
+    - name: Display active user
+      ansible.builtin.debug:
+        msg: "Authenticated as: {{ oc_whoami.stdout }} — beginning BAW teardown."
+
+    - name: Safety pause (override with -e confirm=yes)
+      ansible.builtin.pause:
+        prompt: >
+          WARNING: This will delete namespaces '{{ baw_namespace }}' and '{{ infra_namespace }}'
+          and ALL resources within them (databases, certs, all BAW components).
+          Press ENTER to continue or Ctrl-C to abort.
+      when: confirm != 'yes'
+
+  tasks:
+    # ── ArgoCD Application ─────────────────────────────────────────────────────
+
+    - name: Strip ArgoCD Application finalizer
+      ansible.builtin.shell: >
+        oc patch application {{ argocd_app_name }}
+        -n {{ argocd_namespace }}
+        --type=merge
+        -p '{"metadata":{"finalizers":[]}}'
+      changed_when: false
+      failed_when: false
+
+    - name: Remove ArgoCD Application '{{ argocd_app_name }}'
+      kubernetes.core.k8s:
+        state: absent
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: "{{ argocd_app_name }}"
+        namespace: "{{ argocd_namespace }}"
+        wait: true
+        wait_timeout: 60
+      failed_when: false
+
+    # ── BAStudio Jobs cleanup ──────────────────────────────────────────────────
+
+    - name: Delete BAStudio Jobs
+      kubernetes.core.k8s:
+        state: absent
+        api_version: batch/v1
+        kind: Job
+        name: "{{ item }}"
+        namespace: "{{ baw_namespace }}"
+        wait: true
+        wait_timeout: 30
+      loop:
+        - bastudio-bootstrap
+        - bastudio-content-init
+        - bastudio-workplace-init
+        - bastudio-case-init
+      failed_when: false
+
+    # ── baw namespace ──────────────────────────────────────────────────────────
+
+    - name: Delete baw namespace
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ baw_namespace }}"
+        wait: true
+        wait_timeout: 300
+      failed_when: false
+      register: _baw_ns_delete
+
+    - name: baw namespace deletion status
+      ansible.builtin.debug:
+        msg: "baw namespace: {{ 'deleted' if _baw_ns_delete.changed else 'already absent' }}"
+
+    # ── infra namespace ────────────────────────────────────────────────────────
+
+    - name: Delete infra namespace
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ infra_namespace }}"
+        wait: true
+        wait_timeout: 300
+      failed_when: false
+      register: _infra_ns_delete
+
+    - name: infra namespace deletion status
+      ansible.builtin.debug:
+        msg: "infra namespace: {{ 'deleted' if _infra_ns_delete.changed else 'already absent' }}"
+
+    # ── Cluster-level cleanup ─────────────────────────────────────────────────
+
+    - name: Remove baw-ca-bundle from openshift-config
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: ConfigMap
+        name: baw-ca-bundle
+        namespace: openshift-config
+      failed_when: false
+      tags: [cleanup_trust]
+
+    - name: Clear proxy/cluster trustedCA reference
+      ansible.builtin.shell: >
+        oc patch proxy/cluster --type=merge
+        -p '{"spec":{"trustedCA":{"name":""}}}'
+      changed_when: false
+      failed_when: false
+      tags: [cleanup_trust]
+
+    # ── Remove local cert work dir ─────────────────────────────────────────────
+
+    - name: Remove local cert work directory
+      ansible.builtin.file:
+        path: "{{ cert_work_dir }}"
+        state: absent
+      failed_when: false
+
+    # ── Summary ────────────────────────────────────────────────────────────────
+
+    - name: Verify namespaces are removed
+      ansible.builtin.shell: >
+        oc get project {{ baw_namespace }} {{ infra_namespace }} 2>&1 || true
+      register: _ns_check
+      changed_when: false
+
+    - name: Teardown summary
+      ansible.builtin.debug:
+        msg:
+          - "================================================"
+          - "  IBM BAW Teardown Complete"
+          - "================================================"
+          - ""
+          - "  Removed:"
+          - "    - ArgoCD Application : {{ argocd_app_name }}"
+          - "    - Namespace          : {{ baw_namespace }}"
+          - "    - Namespace          : {{ infra_namespace }}"
+          - "    - Cert work dir      : {{ cert_work_dir }}"
+          - ""
+          - "  Preserved (cluster infrastructure):"
+          - "    - OpenShift GitOps operator"
+          - "    - Storage class : {{ storage_class_name }}"
+          - ""
+          - "  Namespace check:"
+          - "{{ _ns_check.stdout_lines | to_nice_yaml }}"

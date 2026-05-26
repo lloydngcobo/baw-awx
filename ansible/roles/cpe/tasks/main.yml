@@ -1,0 +1,437 @@
+---
+# Role: cpe
+# Deploys IBM FileNet Content Platform Engine (CPE) 5.7 in the baw namespace.
+# Configures JDBC datasources (Liberty overrides), LDAP registry, and SSL.
+# After CPE is ready, creates the FileNet domain (GCD) and DOCS/DOS/TOS object stores.
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+
+- name: Create CPE credentials Secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: cpe-secret
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-cpe
+      stringData:
+        CPE_ADMIN_USER:     "{{ cpe_admin_user }}"
+        CPE_ADMIN_PASSWORD: "{{ cpe_admin_password }}"
+        GCD_DB_USER:        "{{ gcd_db_user }}"
+        GCD_DB_PASS:        "{{ gcd_db_pass }}"
+        DOCS_DB_USER:       "{{ docs_db_user }}"
+        DOCS_DB_PASS:       "{{ docs_db_pass }}"
+        DOS_DB_USER:        "{{ dos_db_user }}"
+        DOS_DB_PASS:        "{{ dos_db_pass }}"
+        TOS_DB_USER:        "{{ tos_db_user }}"
+        TOS_DB_PASS:        "{{ tos_db_pass }}"
+        LDAP_BIND_PASSWORD: "{{ ldap_bind_password }}"
+        KEYSTORE_PASSWORD:  "{{ keystore_password }}"
+  no_log: true
+
+# ── Liberty server overrides ──────────────────────────────────────────────────
+# Mounted at /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/
+# CPE reads these at startup to configure JDBC, LDAP, and SSL.
+
+- name: Create CPE Liberty config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: cpe-liberty-config
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-cpe
+      data:
+        db-datasources.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <library id="PostgreSQLLib">
+              <fileset dir="/opt/ibm/wlp/usr/shared/resources/db/postgres"
+                       includes="*.jar"/>
+            </library>
+
+            <dataSource id="FNGCDDS" jndiName="FNGCDDS"
+                        type="javax.sql.XADataSource">
+              <jdbcDriver libraryRef="PostgreSQLLib"/>
+              <properties.postgresql
+                serverName="{{ postgres_host }}"
+                portNumber="{{ postgres_port }}"
+                databaseName="{{ gcd_db_name }}"
+                user="${env.GCD_DB_USER}"
+                password="${env.GCD_DB_PASS}"/>
+              <connectionManager maxPoolSize="20" minPoolSize="1"/>
+            </dataSource>
+
+            <dataSource id="FNOSDOCS" jndiName="FNOSDOCS"
+                        type="javax.sql.XADataSource">
+              <jdbcDriver libraryRef="PostgreSQLLib"/>
+              <properties.postgresql
+                serverName="{{ postgres_host }}"
+                portNumber="{{ postgres_port }}"
+                databaseName="{{ docs_db_name }}"
+                user="${env.DOCS_DB_USER}"
+                password="${env.DOCS_DB_PASS}"/>
+              <connectionManager maxPoolSize="20" minPoolSize="1"/>
+            </dataSource>
+
+            <dataSource id="FNOS2DS" jndiName="FNOS2DS"
+                        type="javax.sql.XADataSource">
+              <jdbcDriver libraryRef="PostgreSQLLib"/>
+              <properties.postgresql
+                serverName="{{ postgres_host }}"
+                portNumber="{{ postgres_port }}"
+                databaseName="{{ dos_db_name }}"
+                user="${env.DOS_DB_USER}"
+                password="${env.DOS_DB_PASS}"/>
+              <connectionManager maxPoolSize="20" minPoolSize="1"/>
+            </dataSource>
+
+            <dataSource id="FNOS3DS" jndiName="FNOS3DS"
+                        type="javax.sql.XADataSource">
+              <jdbcDriver libraryRef="PostgreSQLLib"/>
+              <properties.postgresql
+                serverName="{{ postgres_host }}"
+                portNumber="{{ postgres_port }}"
+                databaseName="{{ tos_db_name }}"
+                user="${env.TOS_DB_USER}"
+                password="${env.TOS_DB_PASS}"/>
+              <connectionManager maxPoolSize="20" minPoolSize="1"/>
+            </dataSource>
+          </server>
+
+        ldap-registry.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <ldapRegistry id="LDAPUserRegistry"
+              realm="defaultWIMFileBasedRealm"
+              host="{{ ldap_host }}"
+              port="{{ ldap_port }}"
+              baseDN="{{ ldap_base_dn }}"
+              bindDN="{{ ldap_bind_dn }}"
+              bindPassword="${env.LDAP_BIND_PASSWORD}"
+              ldapType="Custom"
+              searchTimeout="120s"
+              connectTimeout="30s">
+              <ldapEntityType name="PersonAccount">
+                <rdnProperty name="uid"/>
+                <objectClass>inetOrgPerson</objectClass>
+              </ldapEntityType>
+              <ldapEntityType name="Group">
+                <rdnProperty name="cn"/>
+                <objectClass>groupOfNames</objectClass>
+                <memberAttribute name="member"/>
+              </ldapEntityType>
+              <userFilter
+                filter="(&amp;(uid=%v)(objectclass=inetOrgPerson))"/>
+              <groupFilter
+                filter="(&amp;(cn=%v)(objectclass=groupOfNames))"/>
+              <userIdMap filter="uid"/>
+              <groupIdMap filter="cn"/>
+              <groupMemberIdMap filter="member"/>
+            </ldapRegistry>
+          </server>
+
+        ssl-config.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <keyStore id="defaultKeyStore"
+              location="/shared/tls/pkcs12/server.p12"
+              password="${env.KEYSTORE_PASSWORD}"
+              type="PKCS12"/>
+            <keyStore id="defaultTrustStore"
+              location="/shared/tls/pkcs12/trusts.p12"
+              password="${env.KEYSTORE_PASSWORD}"
+              type="PKCS12"/>
+            <ssl id="defaultSSLConfig"
+              keyStoreRef="defaultKeyStore"
+              trustStoreRef="defaultTrustStore"
+              sslProtocol="TLSv1.2"/>
+            <sslDefault sslRef="defaultSSLConfig"/>
+          </server>
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+
+- name: Create CPE FileNet data PVC
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: cpe-filenet-pvc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-cpe
+      spec:
+        accessModes: [ReadWriteMany]
+        resources:
+          requests:
+            storage: 20Gi
+        storageClassName: "{{ storage_class_name }}"
+
+- name: Create CPE logs PVC
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: cpe-logs-pvc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-cpe
+      spec:
+        accessModes: [ReadWriteMany]
+        resources:
+          requests:
+            storage: 5Gi
+        storageClassName: "{{ storage_class_name }}"
+
+# ── Deployment ────────────────────────────────────────────────────────────────
+
+- name: Deploy CPE
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: cpe
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-cpe
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: baw-cpe
+        template:
+          metadata:
+            labels:
+              app: baw-cpe
+          spec:
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+            securityContext:
+              runAsUser: 1000140000
+              fsGroup: 1000140000
+            initContainers:
+              - name: cpe-init-permissions
+                image: busybox
+                command: ["sh", "-c", "chmod -R 777 /opt/ibm/filenet/fnlogstore /opt/ibm/filenet/FileNet"]
+                securityContext:
+                  runAsUser: 0
+                volumeMounts:
+                  - name: filenet-data
+                    mountPath: /opt/ibm/filenet/FileNet
+                  - name: logs
+                    mountPath: /opt/ibm/filenet/fnlogstore
+            containers:
+              - name: cpe
+                image: "{{ cpe_image }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - containerPort: 9080
+                    name: http
+                  - containerPort: 9443
+                    name: https
+                envFrom:
+                  - secretRef:
+                      name: cpe-secret
+                env:
+                  - name: LICENSE
+                    value: "{{ baw_license }}"
+                  - name: TZ
+                    value: "{{ timezone }}"
+                  - name: JVM_HEAP_XMS
+                    value: "512m"
+                  - name: JVM_HEAP_XMX
+                    value: "1536m"
+                resources:
+                  requests:
+                    memory: 1Gi
+                    cpu: 500m
+                  limits:
+                    memory: 3Gi
+                    cpu: "2"
+                livenessProbe:
+                  httpGet:
+                    path: /P8CE/Health
+                    port: 9080
+                    scheme: HTTP
+                  initialDelaySeconds: 120
+                  periodSeconds: 30
+                  failureThreshold: 10
+                readinessProbe:
+                  httpGet:
+                    path: /P8CE/Health
+                    port: 9080
+                    scheme: HTTP
+                  initialDelaySeconds: 60
+                  periodSeconds: 15
+                  failureThreshold: 20
+                startupProbe:
+                  httpGet:
+                    path: /P8CE/Health
+                    port: 9080
+                    scheme: HTTP
+                  periodSeconds: 15
+                  failureThreshold: 40
+                volumeMounts:
+                  - name: filenet-data
+                    mountPath: /opt/ibm/filenet/FileNet
+                  - name: logs
+                    mountPath: /opt/ibm/filenet/fnlogstore
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides
+                  - name: tls
+                    mountPath: /shared/tls/pkcs12
+            volumes:
+              - name: filenet-data
+                persistentVolumeClaim:
+                  claimName: cpe-filenet-pvc
+              - name: logs
+                persistentVolumeClaim:
+                  claimName: cpe-logs-pvc
+              - name: liberty-config
+                configMap:
+                  name: cpe-liberty-config
+              - name: tls
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: server.p12
+                      path: server.p12
+                    - key: trusts.p12
+                      path: trusts.p12
+
+# ── Service ───────────────────────────────────────────────────────────────────
+
+- name: Create CPE Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: cpe-svc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-cpe
+      spec:
+        selector:
+          app: baw-cpe
+        ports:
+          - port: 9080
+            targetPort: 9080
+            name: http
+          - port: 9443
+            targetPort: 9443
+            name: https
+
+# ── Wait for CPE readiness ────────────────────────────────────────────────────
+
+- name: Wait for CPE deployment rollout
+  ansible.builtin.shell: >
+    oc rollout status deployment/cpe
+    -n {{ baw_namespace }} --timeout={{ cpe_config_timeout }}s
+  changed_when: false
+
+- name: Wait for CPE WSI health endpoint
+  ansible.builtin.shell: >
+    oc exec -n {{ baw_namespace }}
+    $(oc get pod -n {{ baw_namespace }} -l app=baw-cpe
+      -o jsonpath='{.items[0].metadata.name}') --
+    curl -s -o /dev/null -w "%{http_code}"
+    http://localhost:9080/wsi/FNCEWS40MTOM/
+  register: _cpe_wsi_check
+  until: _cpe_wsi_check.stdout in ['200', '401', '403']
+  retries: 40
+  delay: 30
+  changed_when: false
+
+- name: Get CPE pod name
+  ansible.builtin.shell: >
+    oc get pod -n {{ baw_namespace }} -l app=baw-cpe
+    -o jsonpath='{.items[0].metadata.name}'
+  register: _cpe_pod
+  changed_when: false
+
+# ── GCD initialization (idempotent) ──────────────────────────────────────────
+# Uses the CPE Admin Console REST API to check and create the FileNet domain.
+# The GCD must be created before any object stores can be created.
+
+- name: Check if FileNet domain already initialized
+  ansible.builtin.shell: |
+    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} --
+    curl -sk -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
+    "https://localhost:9443/acce/dispatcher/atom/1.0/domains"
+    -H "Accept: application/atom+xml" 2>&1 | grep -c "<id>" || true
+  register: _gcd_check
+  changed_when: false
+  no_log: true
+
+- name: Initialize FileNet GCD domain
+  ansible.builtin.shell: |
+    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} -- bash -c "
+    /opt/ibm/wlp/usr/servers/defaultServer/bin/executeScript.sh \
+      -userId {{ cpe_admin_user }} \
+      -password {{ cpe_admin_password }} \
+      -url cemp:iiop://localhost:2809/FileNet/Engine \
+      -script /opt/ibm/scripts/init-gcd.py 2>&1"
+  register: _gcd_init
+  changed_when: true
+  failed_when: >
+    _gcd_init.rc != 0 and
+    'already exists' not in _gcd_init.stdout | lower and
+    'already exists' not in _gcd_init.stderr | lower
+  no_log: true
+  when: (_gcd_check.stdout | default('0') | trim | int) == 0
+
+# ── Object store initialization ───────────────────────────────────────────────
+# Each object store is created using CPE admin scripting after GCD is ready.
+# Scripts are embedded inline and piped into the scripting engine.
+
+- name: Create DOCS object store
+  ansible.builtin.shell: |
+    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} -- bash -c "
+    /opt/ibm/wlp/usr/servers/defaultServer/bin/executeScript.sh \
+      -userId {{ cpe_admin_user }} \
+      -password {{ cpe_admin_password }} \
+      -url cemp:iiop://localhost:2809/FileNet/Engine \
+      -scriptText \"
+from com.filenet.api.core import Factory
+from com.filenet.api.admin import ObjectStore
+conn = Factory.Connection.getConnection('iiop://localhost:2809/FileNet/Engine')
+domain = Factory.Domain.fetchInstance(conn, None, None)
+ostore = domain.fetchObject(ObjectStore, '{{ docs_db_name | upper }}', None) if any(
+  o.get_SymbolicName() == '{{ docs_db_name | upper }}'
+  for o in domain.get_ObjectStores().iterator()
+) else None
+if ostore is None:
+  ostore = Factory.ObjectStore.createInstance(domain, '{{ docs_db_name | upper }}')
+  ostore.set_DisplayName('DOCS Object Store')
+  ostore.set_DataSource(domain.fetchObject(None,'FNOSDOCS',None))
+  ostore.save(1)
+print('DONE')
+\" 2>&1"
+  register: _docs_init
+  changed_when: "'DONE' in _docs_init.stdout"
+  failed_when: >
+    _docs_init.rc != 0 and
+    'already exists' not in _docs_init.stdout | lower
+  no_log: true
+
+- name: CPE summary
+  ansible.builtin.debug:
+    msg:
+      - "CPE ready at https://{{ cpe_host }}:{{ cpe_port }}"
+      - "Admin console : https://{{ baw_hostname }}/acce/"
+      - "WSI endpoint  : https://{{ cpe_host }}:{{ cpe_port }}/wsi/FNCEWS40MTOM/"
+      - "Object stores : {{ docs_db_name | upper }}, {{ dos_db_name | upper }}, {{ tos_db_name | upper }}"

@@ -1,0 +1,252 @@
+---
+# Role: certificates
+# Generates Root CA, route certificate, and shared pod certificate.
+# Stores everything in a Kubernetes Secret (baw-ssl-certs) and creates
+# the shared-ssl-config ConfigMap that all BAW pods mount for TLS.
+#
+# Certificate layout:
+#   Root CA        → signs both the route cert and the shared pod cert
+#   Route cert     → SANs: *.{{ effective_ingress_domain }}, {{ baw_hostname }}
+#   Shared cert    → SANs: *.baw.svc.cluster.local, *.infra.svc.cluster.local
+#                          + route SANs (pods also need to serve the external name)
+#
+# All certs are bundled into PKCS12 keystores (server.p12, trusts.p12)
+# with keystore_password.  The ConfigMap mounts these into /shared/tls/pkcs12/
+# on every BAW pod.
+
+# ── Prep ──────────────────────────────────────────────────────────────────────
+
+- name: Create cert work directory
+  ansible.builtin.file:
+    path: "{{ cert_work_dir }}"
+    state: directory
+    mode: "0700"
+
+# ── Root CA ───────────────────────────────────────────────────────────────────
+
+- name: Check if Root CA already generated
+  ansible.builtin.stat:
+    path: "{{ cert_work_dir }}/ca.crt"
+  register: _ca_stat
+
+- name: Generate Root CA private key
+  ansible.builtin.shell: >
+    openssl genrsa -out {{ cert_work_dir }}/ca.key 2048
+  when: not _ca_stat.stat.exists
+  changed_when: true
+
+- name: Generate Root CA certificate (10 years)
+  ansible.builtin.shell: >
+    openssl req -new -x509
+    -key {{ cert_work_dir }}/ca.key
+    -out {{ cert_work_dir }}/ca.crt
+    -days 3650
+    -subj "/C={{ cert_country }}/ST={{ cert_state }}/L={{ cert_locality }}/O={{ cert_org }}/OU={{ cert_ou }}/CN=BAW Root CA"
+    -extensions v3_ca
+    -addext "basicConstraints=critical,CA:TRUE"
+    -addext "keyUsage=critical,keyCertSign,cRLSign"
+  when: not _ca_stat.stat.exists
+  changed_when: true
+
+# ── Shared pod certificate (inter-pod TLS) ────────────────────────────────────
+
+- name: Check if shared cert already generated
+  ansible.builtin.stat:
+    path: "{{ cert_work_dir }}/shared.crt"
+  register: _shared_stat
+
+- name: Write shared cert SAN config
+  ansible.builtin.copy:
+    dest: "{{ cert_work_dir }}/shared.conf"
+    mode: "0600"
+    content: |
+      [req]
+      default_bits       = 2048
+      prompt             = no
+      default_md         = sha256
+      distinguished_name = dn
+      req_extensions     = v3_req
+
+      [dn]
+      C  = {{ cert_country }}
+      ST = {{ cert_state }}
+      L  = {{ cert_locality }}
+      O  = {{ cert_org }}
+      OU = {{ cert_ou }}
+      CN = {{ baw_hostname }}
+
+      [v3_req]
+      subjectAltName = @alt_names
+      keyUsage       = critical, digitalSignature, keyEncipherment
+      extendedKeyUsage = serverAuth, clientAuth
+
+      [alt_names]
+      DNS.1  = {{ baw_hostname }}
+      DNS.2  = *.{{ baw_namespace }}.svc.cluster.local
+      DNS.3  = *.{{ infra_namespace }}.svc.cluster.local
+      DNS.4  = *.{{ effective_ingress_domain }}
+      DNS.5  = localhost
+      IP.1   = 127.0.0.1
+  when: not _shared_stat.stat.exists
+
+- name: Generate shared private key
+  ansible.builtin.shell: >
+    openssl genrsa -out {{ cert_work_dir }}/shared.key 2048
+  when: not _shared_stat.stat.exists
+  changed_when: true
+
+- name: Generate shared CSR
+  ansible.builtin.shell: >
+    openssl req -new
+    -key {{ cert_work_dir }}/shared.key
+    -out {{ cert_work_dir }}/shared.csr
+    -config {{ cert_work_dir }}/shared.conf
+  when: not _shared_stat.stat.exists
+  changed_when: true
+
+- name: Sign shared cert with Root CA (3 years)
+  ansible.builtin.shell: >
+    openssl x509 -req
+    -in {{ cert_work_dir }}/shared.csr
+    -CA {{ cert_work_dir }}/ca.crt
+    -CAkey {{ cert_work_dir }}/ca.key
+    -CAcreateserial
+    -out {{ cert_work_dir }}/shared.crt
+    -days 1095
+    -extensions v3_req
+    -extfile {{ cert_work_dir }}/shared.conf
+  when: not _shared_stat.stat.exists
+  changed_when: true
+
+# ── PKCS12 keystores ──────────────────────────────────────────────────────────
+
+- name: Check if PKCS12 keystore already built
+  ansible.builtin.stat:
+    path: "{{ cert_work_dir }}/server.p12"
+  register: _p12_stat
+
+- name: Build server.p12 (private key + cert + CA chain)
+  ansible.builtin.shell: >
+    openssl pkcs12 -export
+    -in {{ cert_work_dir }}/shared.crt
+    -inkey {{ cert_work_dir }}/shared.key
+    -certfile {{ cert_work_dir }}/ca.crt
+    -out {{ cert_work_dir }}/server.p12
+    -passout pass:{{ keystore_password }}
+    -name "baw-server"
+  when: not _p12_stat.stat.exists
+  changed_when: true
+  no_log: true
+
+- name: Build trusts.p12 (CA cert only — truststore for pods)
+  ansible.builtin.shell: >
+    openssl pkcs12 -export
+    -nokeys
+    -in {{ cert_work_dir }}/ca.crt
+    -out {{ cert_work_dir }}/trusts.p12
+    -passout pass:{{ keystore_password }}
+    -name "baw-ca"
+  when: not _p12_stat.stat.exists
+  changed_when: true
+  no_log: true
+
+# ── Kubernetes Secret (raw cert files) ────────────────────────────────────────
+
+- name: Read cert files for Secret creation
+  ansible.builtin.slurp:
+    src: "{{ cert_work_dir }}/{{ item }}"
+  register: _cert_files
+  loop:
+    - ca.crt
+    - ca.key
+    - shared.crt
+    - shared.key
+    - server.p12
+    - trusts.p12
+
+- name: Build cert data dict
+  ansible.builtin.set_fact:
+    _cert_data: >-
+      {{
+        dict(
+          _cert_files.results
+          | map(attribute='item')
+          | zip(_cert_files.results | map(attribute='content'))
+        )
+      }}
+
+- name: Create baw-ssl-certs Secret in baw namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: baw-ssl-certs
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+      type: Opaque
+      data:
+        ca.crt:      "{{ _cert_data['ca.crt'] }}"
+        ca.key:      "{{ _cert_data['ca.key'] }}"
+        tls.crt:     "{{ _cert_data['shared.crt'] }}"
+        tls.key:     "{{ _cert_data['shared.key'] }}"
+        server.p12:  "{{ _cert_data['server.p12'] }}"
+        trusts.p12:  "{{ _cert_data['trusts.p12'] }}"
+  no_log: true
+
+# ── shared-ssl-config ConfigMap ───────────────────────────────────────────────
+# All BAW pods mount this at /shared/tls/pkcs12/.
+# The ConfigMap uses BinaryData so binary PKCS12 files survive the round-trip.
+
+- name: Create shared-ssl-config ConfigMap in baw namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: shared-ssl-config
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+      binaryData:
+        server.p12:  "{{ _cert_data['server.p12'] }}"
+        trusts.p12:  "{{ _cert_data['trusts.p12'] }}"
+      data:
+        ca.crt: "{{ _cert_data['ca.crt'] | b64decode }}"
+        tls.crt: "{{ _cert_data['shared.crt'] | b64decode }}"
+
+# Register CA in OpenShift cluster trust bundle so internal traffic trusts it
+
+- name: Create fncm-ca-bundle ConfigMap in openshift-config
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: baw-ca-bundle
+        namespace: openshift-config
+        labels:
+          app: baw
+      data:
+        ca-bundle.crt: "{{ _cert_data['ca.crt'] | b64decode }}"
+  failed_when: false
+
+- name: Patch proxy/cluster to reference baw-ca-bundle
+  ansible.builtin.shell: >
+    oc patch proxy/cluster --type=merge
+    -p '{"spec":{"trustedCA":{"name":"baw-ca-bundle"}}}'
+  changed_when: true
+  failed_when: false
+
+- name: Certificates ready
+  ansible.builtin.debug:
+    msg:
+      - "Root CA    : {{ cert_work_dir }}/ca.crt"
+      - "Shared cert: {{ cert_work_dir }}/shared.crt"
+      - "Keystore   : {{ cert_work_dir }}/server.p12"
+      - "Truststore : {{ cert_work_dir }}/trusts.p12"
+      - "ConfigMap  : shared-ssl-config in {{ baw_namespace }}"

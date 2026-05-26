@@ -1,0 +1,288 @@
+---
+# Role: baw_runtime
+# Deploys IBM BAW standalone runtime engine (optional).
+# Only runs when deploy_baw_runtime: true.
+# Requires: CPE, UMS running. Uses baw_runtime_db and baw_pdw_db databases.
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+
+- name: Create BAW Runtime credentials Secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: baw-runtime-secret
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-runtime
+      stringData:
+        BAW_ADMIN_USER:              "{{ ums_admin_user }}"
+        BAW_ADMIN_PASSWORD:          "{{ ums_admin_password }}"
+        BAW_RT_DB_USER:              "{{ baw_rt_db_user }}"
+        BAW_RT_DB_PASS:              "{{ baw_rt_db_pass }}"
+        BAW_PDW_DB_USER:             "{{ baw_pdw_db_user }}"
+        BAW_PDW_DB_PASS:             "{{ baw_pdw_db_pass }}"
+        LDAP_BIND_PASSWORD:          "{{ ldap_bind_password }}"
+        KEYSTORE_PASSWORD:           "{{ keystore_password }}"
+        LTPA_PASSWORD:               "{{ ltpa_password }}"
+        UMS_INTERNAL_CLIENT_SECRET:  "{{ ums_internal_client_secret }}"
+  no_log: true
+
+# ── Liberty server config ─────────────────────────────────────────────────────
+
+- name: Create BAW Runtime Liberty config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: baw-runtime-liberty-config
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-runtime
+      data:
+        db-datasources.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <library id="PostgreSQLLib">
+              <fileset dir="/opt/ibm/wlp/usr/shared/resources/db/postgres"
+                       includes="*.jar"/>
+            </library>
+
+            <dataSource id="BAWRUNTIMEDS" jndiName="jdbc/BAWRuntimeDS"
+                        type="javax.sql.XADataSource">
+              <jdbcDriver libraryRef="PostgreSQLLib"/>
+              <properties.postgresql
+                serverName="{{ postgres_host }}"
+                portNumber="{{ postgres_port }}"
+                databaseName="{{ baw_rt_db_name }}"
+                user="${env.BAW_RT_DB_USER}"
+                password="${env.BAW_RT_DB_PASS}"/>
+              <connectionManager maxPoolSize="20" minPoolSize="1"/>
+            </dataSource>
+
+            <dataSource id="BAWPDWDS" jndiName="jdbc/BAWPDWDS"
+                        type="javax.sql.XADataSource">
+              <jdbcDriver libraryRef="PostgreSQLLib"/>
+              <properties.postgresql
+                serverName="{{ postgres_host }}"
+                portNumber="{{ postgres_port }}"
+                databaseName="{{ baw_pdw_db_name }}"
+                user="${env.BAW_PDW_DB_USER}"
+                password="${env.BAW_PDW_DB_PASS}"/>
+              <connectionManager maxPoolSize="10" minPoolSize="1"/>
+            </dataSource>
+          </server>
+
+        ldap-registry.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <ldapRegistry id="LDAPUserRegistry"
+              realm="defaultWIMFileBasedRealm"
+              host="{{ ldap_host }}"
+              port="{{ ldap_port }}"
+              baseDN="{{ ldap_base_dn }}"
+              bindDN="{{ ldap_bind_dn }}"
+              bindPassword="${env.LDAP_BIND_PASSWORD}"
+              ldapType="Custom">
+              <ldapEntityType name="PersonAccount">
+                <rdnProperty name="uid"/>
+                <objectClass>inetOrgPerson</objectClass>
+              </ldapEntityType>
+              <ldapEntityType name="Group">
+                <rdnProperty name="cn"/>
+                <objectClass>groupOfNames</objectClass>
+                <memberAttribute name="member"/>
+              </ldapEntityType>
+              <userFilter
+                filter="(&amp;(uid=%v)(objectclass=inetOrgPerson))"/>
+              <groupFilter
+                filter="(&amp;(cn=%v)(objectclass=groupOfNames))"/>
+              <userIdMap filter="uid"/>
+              <groupIdMap filter="cn"/>
+              <groupMemberIdMap filter="member"/>
+            </ldapRegistry>
+          </server>
+
+        ssl-config.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <keyStore id="defaultKeyStore"
+              location="/shared/tls/pkcs12/server.p12"
+              password="${env.KEYSTORE_PASSWORD}"
+              type="PKCS12"/>
+            <keyStore id="defaultTrustStore"
+              location="/shared/tls/pkcs12/trusts.p12"
+              password="${env.KEYSTORE_PASSWORD}"
+              type="PKCS12"/>
+            <ssl id="defaultSSLConfig"
+              keyStoreRef="defaultKeyStore"
+              trustStoreRef="defaultTrustStore"
+              sslProtocol="TLSv1.2"/>
+            <sslDefault sslRef="defaultSSLConfig"/>
+          </server>
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+
+- name: Create BAW Runtime data PVC
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: baw-runtime-pvc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-runtime
+      spec:
+        accessModes: [ReadWriteMany]
+        resources:
+          requests:
+            storage: 20Gi
+        storageClassName: "{{ storage_class_name }}"
+
+# ── Deployment ────────────────────────────────────────────────────────────────
+
+- name: Deploy BAW Runtime
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: baw-runtime
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-runtime
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: baw-runtime
+        template:
+          metadata:
+            labels:
+              app: baw-runtime
+          spec:
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+            securityContext:
+              runAsUser: 1000140000
+              fsGroup: 1000140000
+            containers:
+              - name: baw-runtime
+                image: "{{ baw_runtime_image }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - containerPort: 9080
+                    name: http
+                  - containerPort: 9443
+                    name: https
+                envFrom:
+                  - secretRef:
+                      name: baw-runtime-secret
+                env:
+                  - name: CPE_URI
+                    value: "https://{{ cpe_host }}:{{ cpe_port }}/wsi/FNCEWS40MTOM/"
+                  - name: UMS_HOST
+                    value: "https://{{ baw_hostname }}/ums"
+                  - name: TZ
+                    value: "{{ timezone }}"
+                  - name: JVM_HEAP_XMS
+                    value: "1024m"
+                  - name: JVM_HEAP_XMX
+                    value: "2048m"
+                resources:
+                  requests:
+                    memory: 2Gi
+                    cpu: 500m
+                  limits:
+                    memory: 4Gi
+                    cpu: "2"
+                livenessProbe:
+                  httpGet:
+                    path: /baw/health
+                    port: 9080
+                    scheme: HTTP
+                  initialDelaySeconds: 120
+                  periodSeconds: 30
+                  failureThreshold: 10
+                readinessProbe:
+                  httpGet:
+                    path: /baw/health
+                    port: 9080
+                    scheme: HTTP
+                  initialDelaySeconds: 90
+                  periodSeconds: 15
+                  failureThreshold: 20
+                startupProbe:
+                  httpGet:
+                    path: /baw/health
+                    port: 9080
+                    scheme: HTTP
+                  periodSeconds: 15
+                  failureThreshold: 60
+                volumeMounts:
+                  - name: data
+                    mountPath: /opt/ibm/baw/data
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides
+                  - name: tls
+                    mountPath: /shared/tls/pkcs12
+            volumes:
+              - name: data
+                persistentVolumeClaim:
+                  claimName: baw-runtime-pvc
+              - name: liberty-config
+                configMap:
+                  name: baw-runtime-liberty-config
+              - name: tls
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: server.p12
+                      path: server.p12
+                    - key: trusts.p12
+                      path: trusts.p12
+
+# ── Service ───────────────────────────────────────────────────────────────────
+
+- name: Create BAW Runtime Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: baw-runtime-svc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-runtime
+      spec:
+        selector:
+          app: baw-runtime
+        ports:
+          - port: 9080
+            targetPort: 9080
+            name: http
+          - port: 9443
+            targetPort: 9443
+            name: https
+
+# ── Wait ──────────────────────────────────────────────────────────────────────
+
+- name: Wait for BAW Runtime deployment
+  ansible.builtin.shell: >
+    oc rollout status deployment/baw-runtime
+    -n {{ baw_namespace }} --timeout={{ pod_ready_timeout }}s
+  changed_when: false
+
+- name: BAW Runtime summary
+  ansible.builtin.debug:
+    msg:
+      - "BAW Runtime ready at https://baw-runtime-svc.{{ baw_namespace }}.svc.cluster.local:9443"
+      - "BAW Runtime URL : https://{{ baw_hostname }}/baw/"

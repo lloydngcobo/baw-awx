@@ -1,0 +1,15 @@
+---
+# ArgoCD role defaults — override in group_vars/all.yml or AWX survey.
+
+configure_argocd: false
+
+argocd_namespace:             "openshift-gitops"
+argocd_app_name:              "baw-deploy"
+argocd_gitops_repo_url:       "https://github.com/lloydngcobo/baw-gitops"
+argocd_gitops_repo_path:      "manifests"
+argocd_gitops_revision:       "HEAD"
+argocd_gitops_local_repo_path: "/tmp/baw-gitops"
+
+argocd_auto_sync: false
+argocd_self_heal: false
+argocd_prune:     false

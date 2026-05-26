@@ -1,0 +1,426 @@
+---
+# Role: ldap
+# Deploys IBM Security Verify Directory Server (ISVD) in the infra namespace.
+# Loads BAW LDAP structure: base DIT, 8 users, 10 groups.
+# Users: bindldap, bawadmin, p8admin, bawuser, p8user, test, admin, odmadmin
+# Groups: bawadmins, tw_admins, tw_authors, p8admins, bawusers, p8users,
+#         resAdministrators, resDeployers, resMonitors, resExecutors
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+
+- name: Create LDAP credentials Secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ldap-secret
+        namespace: "{{ infra_namespace }}"
+        labels:
+          app: baw-ldap
+      stringData:
+        ISVD_ADMIN_PWD: "{{ ldap_admin_password }}"
+  no_log: true
+
+# ── LDIF ConfigMap ────────────────────────────────────────────────────────────
+
+- name: Create LDIF seed ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ldap-seed-ldifs
+        namespace: "{{ infra_namespace }}"
+        labels:
+          app: baw-ldap
+      data:
+        base.ldif: |
+          dn: dc=demodom,dc=nl
+          objectClass: top
+          objectClass: domain
+          dc: demodom
+
+          dn: ou=dev,dc=demodom,dc=nl
+          objectClass: top
+          objectClass: organizationalUnit
+          ou: dev
+
+        users.ldif: |
+          dn: uid=bindldap,ou=dev,dc=demodom,dc=nl
+          objectClass: inetOrgPerson
+          objectClass: organizationalPerson
+          objectClass: person
+          objectClass: top
+          uid: bindldap
+          cn: bindldap
+          sn: bindldap
+          mail: bindldap@demodom.nl
+          userPassword: {{ ldap_admin_password }}
+
+          dn: uid=bawadmin,ou=dev,dc=demodom,dc=nl
+          objectClass: inetOrgPerson
+          objectClass: organizationalPerson
+          objectClass: person
+          objectClass: top
+          uid: bawadmin
+          cn: bawadmin
+          sn: bawadmin
+          mail: bawadmin@demodom.nl
+          userPassword: {{ ldap_admin_password }}
+
+          dn: uid=p8admin,ou=dev,dc=demodom,dc=nl
+          objectClass: inetOrgPerson
+          objectClass: organizationalPerson
+          objectClass: person
+          objectClass: top
+          uid: p8admin
+          cn: p8admin
+          sn: p8admin
+          mail: p8admin@demodom.nl
+          userPassword: {{ ldap_admin_password }}
+
+          dn: uid=bawuser,ou=dev,dc=demodom,dc=nl
+          objectClass: inetOrgPerson
+          objectClass: organizationalPerson
+          objectClass: person
+          objectClass: top
+          uid: bawuser
+          cn: bawuser
+          sn: bawuser
+          mail: bawuser@demodom.nl
+          userPassword: {{ ldap_admin_password }}
+
+          dn: uid=p8user,ou=dev,dc=demodom,dc=nl
+          objectClass: inetOrgPerson
+          objectClass: organizationalPerson
+          objectClass: person
+          objectClass: top
+          uid: p8user
+          cn: p8user
+          sn: p8user
+          mail: p8user@demodom.nl
+          userPassword: {{ ldap_admin_password }}
+
+          dn: uid=test,ou=dev,dc=demodom,dc=nl
+          objectClass: inetOrgPerson
+          objectClass: organizationalPerson
+          objectClass: person
+          objectClass: top
+          uid: test
+          cn: test
+          sn: test
+          mail: test@demodom.nl
+          userPassword: {{ ldap_admin_password }}
+
+          dn: uid=admin,ou=dev,dc=demodom,dc=nl
+          objectClass: inetOrgPerson
+          objectClass: organizationalPerson
+          objectClass: person
+          objectClass: top
+          uid: admin
+          cn: admin
+          sn: admin
+          mail: admin@demodom.nl
+          userPassword: {{ ldap_admin_password }}
+
+          dn: uid=odmadmin,ou=dev,dc=demodom,dc=nl
+          objectClass: inetOrgPerson
+          objectClass: organizationalPerson
+          objectClass: person
+          objectClass: top
+          uid: odmadmin
+          cn: odmadmin
+          sn: odmadmin
+          mail: odmadmin@demodom.nl
+          userPassword: {{ ldap_admin_password }}
+
+        groups.ldif: |
+          dn: cn=bawadmins,ou=dev,dc=demodom,dc=nl
+          objectClass: groupOfNames
+          objectClass: top
+          cn: bawadmins
+          member: uid=bawadmin,ou=dev,dc=demodom,dc=nl
+          member: uid=admin,ou=dev,dc=demodom,dc=nl
+
+          dn: cn=tw_admins,ou=dev,dc=demodom,dc=nl
+          objectClass: groupOfNames
+          objectClass: top
+          cn: tw_admins
+          member: uid=bawadmin,ou=dev,dc=demodom,dc=nl
+
+          dn: cn=tw_authors,ou=dev,dc=demodom,dc=nl
+          objectClass: groupOfNames
+          objectClass: top
+          cn: tw_authors
+          member: uid=bawadmin,ou=dev,dc=demodom,dc=nl
+          member: uid=bawuser,ou=dev,dc=demodom,dc=nl
+
+          dn: cn=p8admins,ou=dev,dc=demodom,dc=nl
+          objectClass: groupOfNames
+          objectClass: top
+          cn: p8admins
+          member: uid=p8admin,ou=dev,dc=demodom,dc=nl
+          member: uid=bawadmin,ou=dev,dc=demodom,dc=nl
+
+          dn: cn=bawusers,ou=dev,dc=demodom,dc=nl
+          objectClass: groupOfNames
+          objectClass: top
+          cn: bawusers
+          member: uid=bawuser,ou=dev,dc=demodom,dc=nl
+          member: uid=test,ou=dev,dc=demodom,dc=nl
+
+          dn: cn=p8users,ou=dev,dc=demodom,dc=nl
+          objectClass: groupOfNames
+          objectClass: top
+          cn: p8users
+          member: uid=p8user,ou=dev,dc=demodom,dc=nl
+          member: uid=bawuser,ou=dev,dc=demodom,dc=nl
+
+          dn: cn=resAdministrators,ou=dev,dc=demodom,dc=nl
+          objectClass: groupOfNames
+          objectClass: top
+          cn: resAdministrators
+          member: uid=bawadmin,ou=dev,dc=demodom,dc=nl
+
+          dn: cn=resDeployers,ou=dev,dc=demodom,dc=nl
+          objectClass: groupOfNames
+          objectClass: top
+          cn: resDeployers
+          member: uid=bawadmin,ou=dev,dc=demodom,dc=nl
+
+          dn: cn=resMonitors,ou=dev,dc=demodom,dc=nl
+          objectClass: groupOfNames
+          objectClass: top
+          cn: resMonitors
+          member: uid=bawadmin,ou=dev,dc=demodom,dc=nl
+          member: uid=bawuser,ou=dev,dc=demodom,dc=nl
+
+          dn: cn=resExecutors,ou=dev,dc=demodom,dc=nl
+          objectClass: groupOfNames
+          objectClass: top
+          cn: resExecutors
+          member: uid=bawadmin,ou=dev,dc=demodom,dc=nl
+          member: uid=bawuser,ou=dev,dc=demodom,dc=nl
+  no_log: true
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+
+- name: Create LDAP data PVC
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: ldap-pvc
+        namespace: "{{ infra_namespace }}"
+        labels:
+          app: baw-ldap
+      spec:
+        accessModes: [ReadWriteMany]
+        resources:
+          requests:
+            storage: 5Gi
+        storageClassName: "{{ storage_class_name }}"
+
+# ── Deployment ────────────────────────────────────────────────────────────────
+
+- name: Deploy ISVD LDAP
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ldap
+        namespace: "{{ infra_namespace }}"
+        labels:
+          app: baw-ldap
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: baw-ldap
+        template:
+          metadata:
+            labels:
+              app: baw-ldap
+          spec:
+            securityContext:
+              fsGroup: 1000
+            containers:
+              - name: ldap
+                image: "{{ ldap_image }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - containerPort: 9389
+                    name: ldap
+                env:
+                  - name: ISVD_ADMIN_DN
+                    value: "cn=root"
+                  - name: ISVD_ADMIN_PWD
+                    valueFrom:
+                      secretKeyRef:
+                        name: ldap-secret
+                        key: ISVD_ADMIN_PWD
+                  - name: ISVD_SUFFIX
+                    value: "{{ ldap_base_dn }}"
+                  - name: TZ
+                    value: "{{ timezone }}"
+                resources:
+                  requests:
+                    memory: 512Mi
+                    cpu: 250m
+                  limits:
+                    memory: 1Gi
+                    cpu: "1"
+                livenessProbe:
+                  exec:
+                    command:
+                      - /bin/sh
+                      - -c
+                      - >
+                        ldapsearch -x -H ldap://localhost:9389
+                        -D "cn=root" -w "${ISVD_ADMIN_PWD}"
+                        -b "{{ ldap_base_dn }}" -s base > /dev/null 2>&1
+                  initialDelaySeconds: 60
+                  periodSeconds: 15
+                  failureThreshold: 8
+                readinessProbe:
+                  exec:
+                    command:
+                      - /bin/sh
+                      - -c
+                      - >
+                        ldapsearch -x -H ldap://localhost:9389
+                        -D "cn=root" -w "${ISVD_ADMIN_PWD}"
+                        -b "{{ ldap_base_dn }}" -s base > /dev/null 2>&1
+                  initialDelaySeconds: 30
+                  periodSeconds: 10
+                  failureThreshold: 12
+                volumeMounts:
+                  - name: data
+                    mountPath: /var/lib/isvd
+                  - name: ldifs
+                    mountPath: /tmp/ldifs
+            volumes:
+              - name: data
+                persistentVolumeClaim:
+                  claimName: ldap-pvc
+              - name: ldifs
+                configMap:
+                  name: ldap-seed-ldifs
+
+# ── Service ───────────────────────────────────────────────────────────────────
+
+- name: Create LDAP Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ldap-svc
+        namespace: "{{ infra_namespace }}"
+        labels:
+          app: baw-ldap
+      spec:
+        selector:
+          app: baw-ldap
+        ports:
+          - port: 9389
+            targetPort: 9389
+            name: ldap
+
+# ── Wait and seed ─────────────────────────────────────────────────────────────
+
+- name: Wait for LDAP deployment
+  ansible.builtin.shell: >
+    oc rollout status deployment/ldap
+    -n {{ infra_namespace }} --timeout=300s
+  changed_when: false
+
+- name: Get LDAP pod name
+  ansible.builtin.shell: >
+    oc get pod -n {{ infra_namespace }} -l app=baw-ldap
+    -o jsonpath='{.items[0].metadata.name}'
+  register: _ldap_pod
+  changed_when: false
+
+- name: Check if LDAP base DIT already seeded
+  ansible.builtin.shell: >
+    oc exec -n {{ infra_namespace }} {{ _ldap_pod.stdout }} --
+    ldapsearch -x -H ldap://localhost:9389
+    -D "cn=root" -w "{{ ldap_admin_password }}"
+    -b "ou=dev,{{ ldap_base_dn }}" -s base 2>&1 | grep -c "dn:" || true
+  register: _ldap_base_check
+  changed_when: false
+  no_log: true
+
+- name: Load base DIT LDIF
+  ansible.builtin.shell: >
+    oc exec -n {{ infra_namespace }} {{ _ldap_pod.stdout }} --
+    ldapadd -x -H ldap://localhost:9389
+    -D "cn=root" -w "{{ ldap_admin_password }}"
+    -f /tmp/ldifs/base.ldif
+  register: _ldap_base
+  changed_when: true
+  failed_when: _ldap_base.rc not in [0, 68]
+  no_log: true
+  when: (_ldap_base_check.stdout | default('0') | trim | int) == 0
+
+- name: Check if LDAP users already loaded
+  ansible.builtin.shell: >
+    oc exec -n {{ infra_namespace }} {{ _ldap_pod.stdout }} --
+    ldapsearch -x -H ldap://localhost:9389
+    -D "cn=root" -w "{{ ldap_admin_password }}"
+    -b "ou=dev,{{ ldap_base_dn }}" "(uid=bawadmin)" 2>&1 | grep -c "dn:" || true
+  register: _ldap_users_check
+  changed_when: false
+  no_log: true
+
+- name: Load users LDIF
+  ansible.builtin.shell: >
+    oc exec -n {{ infra_namespace }} {{ _ldap_pod.stdout }} --
+    ldapadd -x -H ldap://localhost:9389
+    -D "cn=root" -w "{{ ldap_admin_password }}"
+    -f /tmp/ldifs/users.ldif
+  register: _ldap_users
+  changed_when: true
+  failed_when: _ldap_users.rc not in [0, 68]
+  no_log: true
+  when: (_ldap_users_check.stdout | default('0') | trim | int) == 0
+
+- name: Check if LDAP groups already loaded
+  ansible.builtin.shell: >
+    oc exec -n {{ infra_namespace }} {{ _ldap_pod.stdout }} --
+    ldapsearch -x -H ldap://localhost:9389
+    -D "cn=root" -w "{{ ldap_admin_password }}"
+    -b "ou=dev,{{ ldap_base_dn }}" "(cn=bawadmins)" 2>&1 | grep -c "dn:" || true
+  register: _ldap_groups_check
+  changed_when: false
+  no_log: true
+
+- name: Load groups LDIF
+  ansible.builtin.shell: >
+    oc exec -n {{ infra_namespace }} {{ _ldap_pod.stdout }} --
+    ldapadd -x -H ldap://localhost:9389
+    -D "cn=root" -w "{{ ldap_admin_password }}"
+    -f /tmp/ldifs/groups.ldif
+  register: _ldap_groups
+  changed_when: true
+  failed_when: _ldap_groups.rc not in [0, 68]
+  no_log: true
+  when: (_ldap_groups_check.stdout | default('0') | trim | int) == 0
+
+- name: LDAP summary
+  ansible.builtin.debug:
+    msg:
+      - "LDAP ready at {{ ldap_host }}:{{ ldap_port }}"
+      - "Base DN  : {{ ldap_base_dn }}"
+      - "Bind DN  : {{ ldap_bind_dn }}"
+      - "Users    : bindldap, bawadmin, p8admin, bawuser, p8user, test, admin, odmadmin"
+      - "Groups   : bawadmins, tw_admins, tw_authors, p8admins, bawusers, p8users, resAdministrators, resDeployers, resMonitors, resExecutors"

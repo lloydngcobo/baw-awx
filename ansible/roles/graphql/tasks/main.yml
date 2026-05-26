@@ -1,0 +1,196 @@
+---
+# Role: graphql
+# Deploys IBM FileNet Content Services GraphQL API in the baw namespace.
+# Provides a GraphQL interface to the CPE content repository.
+# Requires CPE to be running.
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+
+- name: Create GraphQL credentials Secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: graphql-secret
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-graphql
+      stringData:
+        GRAPHQL_ADMIN_USER:     "{{ cpe_admin_user }}"
+        GRAPHQL_ADMIN_PASSWORD: "{{ cpe_admin_password }}"
+        KEYSTORE_PASSWORD:      "{{ keystore_password }}"
+  no_log: true
+
+# ── ConfigMap ─────────────────────────────────────────────────────────────────
+
+- name: Create GraphQL config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: graphql-config
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-graphql
+      data:
+        graphql-config.properties: |
+          content.engine.url=https://{{ cpe_host }}:{{ cpe_port }}/wsi/FNCEWS40MTOM/
+          content.engine.admin.user={{ cpe_admin_user }}
+          ssl.keystore=/shared/tls/pkcs12/server.p12
+          ssl.truststore=/shared/tls/pkcs12/trusts.p12
+
+        ssl-config.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <keyStore id="defaultKeyStore"
+              location="/shared/tls/pkcs12/server.p12"
+              password="${env.KEYSTORE_PASSWORD}"
+              type="PKCS12"/>
+            <keyStore id="defaultTrustStore"
+              location="/shared/tls/pkcs12/trusts.p12"
+              password="${env.KEYSTORE_PASSWORD}"
+              type="PKCS12"/>
+            <ssl id="defaultSSLConfig"
+              keyStoreRef="defaultKeyStore"
+              trustStoreRef="defaultTrustStore"
+              sslProtocol="TLSv1.2"/>
+            <sslDefault sslRef="defaultSSLConfig"/>
+          </server>
+
+# ── Deployment ────────────────────────────────────────────────────────────────
+
+- name: Deploy GraphQL
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: graphql
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-graphql
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: baw-graphql
+        template:
+          metadata:
+            labels:
+              app: baw-graphql
+          spec:
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+            securityContext:
+              runAsUser: 1000140000
+              fsGroup: 1000140000
+            containers:
+              - name: graphql
+                image: "{{ graphql_image }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - containerPort: 9080
+                    name: http
+                  - containerPort: 9443
+                    name: https
+                envFrom:
+                  - secretRef:
+                      name: graphql-secret
+                env:
+                  - name: CPE_URI
+                    value: "https://{{ cpe_host }}:{{ cpe_port }}/wsi/FNCEWS40MTOM/"
+                  - name: TZ
+                    value: "{{ timezone }}"
+                resources:
+                  requests:
+                    memory: 512Mi
+                    cpu: 250m
+                  limits:
+                    memory: 2Gi
+                    cpu: "1"
+                livenessProbe:
+                  httpGet:
+                    path: /content-services-graphql/
+                    port: 9080
+                    scheme: HTTP
+                  initialDelaySeconds: 60
+                  periodSeconds: 30
+                  failureThreshold: 8
+                readinessProbe:
+                  httpGet:
+                    path: /content-services-graphql/
+                    port: 9080
+                    scheme: HTTP
+                  initialDelaySeconds: 30
+                  periodSeconds: 15
+                  failureThreshold: 12
+                startupProbe:
+                  httpGet:
+                    path: /content-services-graphql/
+                    port: 9080
+                    scheme: HTTP
+                  periodSeconds: 15
+                  failureThreshold: 30
+                volumeMounts:
+                  - name: config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides
+                  - name: tls
+                    mountPath: /shared/tls/pkcs12
+            volumes:
+              - name: config
+                configMap:
+                  name: graphql-config
+                  items:
+                    - key: ssl-config.xml
+                      path: ssl-config.xml
+              - name: tls
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: server.p12
+                      path: server.p12
+                    - key: trusts.p12
+                      path: trusts.p12
+
+# ── Service ───────────────────────────────────────────────────────────────────
+
+- name: Create GraphQL Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: graphql-svc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-graphql
+      spec:
+        selector:
+          app: baw-graphql
+        ports:
+          - port: 9080
+            targetPort: 9080
+            name: http
+          - port: 9443
+            targetPort: 9443
+            name: https
+
+# ── Wait ──────────────────────────────────────────────────────────────────────
+
+- name: Wait for GraphQL deployment
+  ansible.builtin.shell: >
+    oc rollout status deployment/graphql
+    -n {{ baw_namespace }} --timeout={{ pod_ready_timeout }}s
+  changed_when: false
+
+- name: GraphQL summary
+  ansible.builtin.debug:
+    msg:
+      - "GraphQL ready at https://graphql-svc.{{ baw_namespace }}.svc.cluster.local:9443"
+      - "GraphQL URL : https://{{ baw_hostname }}/content-services-graphql/"

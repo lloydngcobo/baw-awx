@@ -1,0 +1,294 @@
+---
+# Role: icn
+# Deploys IBM Content Navigator (ICN) 3.2 in the baw namespace.
+# ICN provides the web-based document management UI.
+# Requires CPE to be running and the icn_db PostgreSQL database to exist.
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+
+- name: Create ICN credentials Secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: icn-secret
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-icn
+      stringData:
+        ICN_ADMIN_USER:     "{{ cpe_admin_user }}"
+        ICN_ADMIN_PASSWORD: "{{ cpe_admin_password }}"
+        ICN_DB_USER:        "{{ icn_db_user }}"
+        ICN_DB_PASS:        "{{ icn_db_pass }}"
+        LDAP_BIND_PASSWORD: "{{ ldap_bind_password }}"
+        KEYSTORE_PASSWORD:  "{{ keystore_password }}"
+  no_log: true
+
+# ── Liberty server overrides ──────────────────────────────────────────────────
+
+- name: Create ICN Liberty config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: icn-liberty-config
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-icn
+      data:
+        db-datasources.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <library id="PostgreSQLLib">
+              <fileset dir="/opt/ibm/wlp/usr/shared/resources/db/postgres"
+                       includes="*.jar"/>
+            </library>
+
+            <dataSource id="ECMClientDS" jndiName="ECMClientDS"
+                        type="javax.sql.XADataSource">
+              <jdbcDriver libraryRef="PostgreSQLLib"/>
+              <properties.postgresql
+                serverName="{{ postgres_host }}"
+                portNumber="{{ postgres_port }}"
+                databaseName="{{ icn_db_name }}"
+                user="${env.ICN_DB_USER}"
+                password="${env.ICN_DB_PASS}"
+                currentSchema="icn_schema"/>
+              <connectionManager maxPoolSize="20" minPoolSize="1"/>
+            </dataSource>
+          </server>
+
+        ldap-registry.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <ldapRegistry id="LDAPUserRegistry"
+              realm="defaultWIMFileBasedRealm"
+              host="{{ ldap_host }}"
+              port="{{ ldap_port }}"
+              baseDN="{{ ldap_base_dn }}"
+              bindDN="{{ ldap_bind_dn }}"
+              bindPassword="${env.LDAP_BIND_PASSWORD}"
+              ldapType="Custom">
+              <ldapEntityType name="PersonAccount">
+                <rdnProperty name="uid"/>
+                <objectClass>inetOrgPerson</objectClass>
+              </ldapEntityType>
+              <ldapEntityType name="Group">
+                <rdnProperty name="cn"/>
+                <objectClass>groupOfNames</objectClass>
+                <memberAttribute name="member"/>
+              </ldapEntityType>
+              <userFilter
+                filter="(&amp;(uid=%v)(objectclass=inetOrgPerson))"/>
+              <groupFilter
+                filter="(&amp;(cn=%v)(objectclass=groupOfNames))"/>
+              <userIdMap filter="uid"/>
+              <groupIdMap filter="cn"/>
+              <groupMemberIdMap filter="member"/>
+            </ldapRegistry>
+          </server>
+
+        ssl-config.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <keyStore id="defaultKeyStore"
+              location="/shared/tls/pkcs12/server.p12"
+              password="${env.KEYSTORE_PASSWORD}"
+              type="PKCS12"/>
+            <keyStore id="defaultTrustStore"
+              location="/shared/tls/pkcs12/trusts.p12"
+              password="${env.KEYSTORE_PASSWORD}"
+              type="PKCS12"/>
+            <ssl id="defaultSSLConfig"
+              keyStoreRef="defaultKeyStore"
+              trustStoreRef="defaultTrustStore"
+              sslProtocol="TLSv1.2"/>
+            <sslDefault sslRef="defaultSSLConfig"/>
+          </server>
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+
+- name: Create ICN data PVC
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: icn-pvc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-icn
+      spec:
+        accessModes: [ReadWriteMany]
+        resources:
+          requests:
+            storage: 10Gi
+        storageClassName: "{{ storage_class_name }}"
+
+- name: Create ICN logs PVC
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: icn-logs-pvc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-icn
+      spec:
+        accessModes: [ReadWriteMany]
+        resources:
+          requests:
+            storage: 5Gi
+        storageClassName: "{{ storage_class_name }}"
+
+# ── Deployment ────────────────────────────────────────────────────────────────
+
+- name: Deploy ICN Navigator
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: icn
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-icn
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: baw-icn
+        template:
+          metadata:
+            labels:
+              app: baw-icn
+          spec:
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+            securityContext:
+              runAsUser: 1000140000
+              fsGroup: 1000140000
+            containers:
+              - name: icn
+                image: "{{ icn_image }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - containerPort: 9080
+                    name: http
+                  - containerPort: 9443
+                    name: https
+                envFrom:
+                  - secretRef:
+                      name: icn-secret
+                env:
+                  - name: LICENSE
+                    value: "{{ baw_license }}"
+                  - name: TZ
+                    value: "{{ timezone }}"
+                  - name: JVM_HEAP_XMS
+                    value: "512m"
+                  - name: JVM_HEAP_XMX
+                    value: "1536m"
+                resources:
+                  requests:
+                    memory: 1Gi
+                    cpu: 500m
+                  limits:
+                    memory: 3Gi
+                    cpu: "2"
+                livenessProbe:
+                  httpGet:
+                    path: /navigator/logout.jsp
+                    port: 9080
+                    scheme: HTTP
+                  initialDelaySeconds: 120
+                  periodSeconds: 30
+                  failureThreshold: 10
+                readinessProbe:
+                  httpGet:
+                    path: /navigator/logout.jsp
+                    port: 9080
+                    scheme: HTTP
+                  initialDelaySeconds: 90
+                  periodSeconds: 15
+                  failureThreshold: 20
+                startupProbe:
+                  httpGet:
+                    path: /navigator/logout.jsp
+                    port: 9080
+                    scheme: HTTP
+                  periodSeconds: 15
+                  failureThreshold: 40
+                volumeMounts:
+                  - name: data
+                    mountPath: /opt/ibm/viewerconfig
+                  - name: logs
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/logs
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides
+                  - name: tls
+                    mountPath: /shared/tls/pkcs12
+            volumes:
+              - name: data
+                persistentVolumeClaim:
+                  claimName: icn-pvc
+              - name: logs
+                persistentVolumeClaim:
+                  claimName: icn-logs-pvc
+              - name: liberty-config
+                configMap:
+                  name: icn-liberty-config
+              - name: tls
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: server.p12
+                      path: server.p12
+                    - key: trusts.p12
+                      path: trusts.p12
+
+# ── Service ───────────────────────────────────────────────────────────────────
+
+- name: Create ICN Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: icn-svc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-icn
+      spec:
+        selector:
+          app: baw-icn
+        ports:
+          - port: 9080
+            targetPort: 9080
+            name: http
+          - port: 9443
+            targetPort: 9443
+            name: https
+
+# ── Wait ──────────────────────────────────────────────────────────────────────
+
+- name: Wait for ICN deployment
+  ansible.builtin.shell: >
+    oc rollout status deployment/icn
+    -n {{ baw_namespace }} --timeout={{ pod_ready_timeout }}s
+  changed_when: false
+
+- name: ICN summary
+  ansible.builtin.debug:
+    msg:
+      - "ICN ready at https://icn-svc.{{ baw_namespace }}.svc.cluster.local:9443"
+      - "Navigator URL : https://{{ baw_hostname }}/navigator/"

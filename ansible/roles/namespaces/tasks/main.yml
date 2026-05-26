@@ -1,0 +1,101 @@
+---
+# Role: namespaces
+# Creates baw + infra namespaces, UID annotations, SCCs, and image pull secrets.
+
+- name: Create baw namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: project.openshift.io/v1
+      kind: Project
+      metadata:
+        name: "{{ baw_namespace }}"
+        annotations:
+          openshift.io/sa.scc.uid-range: "1000140000/1000"
+          openshift.io/sa.scc.supplemental-groups: "1000140000/1000"
+        labels:
+          app: baw
+
+- name: Create infra namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: project.openshift.io/v1
+      kind: Project
+      metadata:
+        name: "{{ infra_namespace }}"
+        labels:
+          pod-security.kubernetes.io/enforce: privileged
+          app: baw-infra
+
+# ── SCCs ──────────────────────────────────────────────────────────────────────
+# BAW/CPE/ICN/UMS containers run as UID 1000140000 (fixed).
+# anyuid lets the fixed UID pass without a specific SCC range match.
+
+- name: Grant anyuid SCC to baw default SA
+  ansible.builtin.shell: >
+    oc adm policy add-scc-to-user anyuid
+    system:serviceaccount:{{ baw_namespace }}:default
+  changed_when: false
+  failed_when: false
+
+- name: Grant privileged SCC to infra default SA (PostgreSQL, LDAP)
+  ansible.builtin.shell: >
+    oc adm policy add-scc-to-user privileged
+    system:serviceaccount:{{ infra_namespace }}:default
+  changed_when: false
+  failed_when: false
+
+# ── IBM Entitlement Key pull secrets ──────────────────────────────────────────
+
+- name: Create IBM entitlement key secret in baw namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ibm-entitlement-key
+        namespace: "{{ baw_namespace }}"
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: >-
+          {{ ('{"auths":{"cp.icr.io":{"username":"cp","password":"' +
+              ibm_entitlement_key + '","auth":"' +
+              ('cp:' + ibm_entitlement_key) | b64encode + '"}}}')
+             | b64encode }}
+  when: ibm_entitlement_key | length > 0
+  no_log: true
+
+- name: Create IBM entitlement key secret in infra namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ibm-entitlement-key
+        namespace: "{{ infra_namespace }}"
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: >-
+          {{ ('{"auths":{"cp.icr.io":{"username":"cp","password":"' +
+              ibm_entitlement_key + '","auth":"' +
+              ('cp:' + ibm_entitlement_key) | b64encode + '"}}}')
+             | b64encode }}
+  when: ibm_entitlement_key | length > 0
+  no_log: true
+
+- name: Warn if entitlement key not set
+  ansible.builtin.debug:
+    msg: >
+      WARNING: ibm_entitlement_key is empty.
+      IBM image pulls from cp.icr.io will fail.
+      Set ibm_entitlement_key in group_vars/all.yml or as an AWX survey variable.
+  when: ibm_entitlement_key | length == 0
+
+- name: Namespaces ready
+  ansible.builtin.debug:
+    msg:
+      - "Namespace '{{ baw_namespace }}' ready (UID range: 1000140000/1000, anyuid SCC granted)"
+      - "Namespace '{{ infra_namespace }}' ready (privileged SCC granted)"
