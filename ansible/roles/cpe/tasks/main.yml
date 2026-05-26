@@ -255,6 +255,13 @@
                     value: "accept"
                   - name: LICENSEMODEL
                     value: "{{ baw_license }}"
+                  # Disable OpenJ9 NSS FIPS mode.
+                  # cpe-setup.sh writes "-Dsemeru.fips=true" unless disableFIPS=true.
+                  # Without this, Liberty fails with "NSS module not available: fips"
+                  # because the NSS FIPS module is not present in the container image,
+                  # even when the cluster kernel has fips_enabled=0.
+                  - name: disableFIPS
+                    value: "true"
                   - name: TZ
                     value: "{{ timezone }}"
                   - name: JVM_HEAP_XMS
