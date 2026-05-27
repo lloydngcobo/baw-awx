@@ -392,8 +392,7 @@
 - name: Wait for CPE WSI health endpoint
   ansible.builtin.shell: >-
     oc exec -n {{ baw_namespace }} -c cpe
-    $(oc get pod -n {{ baw_namespace }} -l app=baw-cpe
-      -o jsonpath='{.items[0].metadata.name}') --
+    $(oc get pod -n {{ baw_namespace }} -l app=baw-cpe -o jsonpath='{.items[0].metadata.name}') --
     curl -s -o /dev/null -w "%{http_code}"
     http://localhost:9080/wsi/FNCEWS40MTOM/
   register: _cpe_wsi_check
