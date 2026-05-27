@@ -365,6 +365,7 @@
 - name: Deploy BAStudio
   kubernetes.core.k8s:
     state: present
+    apply: true
     definition:
       apiVersion: apps/v1
       kind: Deployment
@@ -446,8 +447,20 @@
                     mountPath: /opt/ibm/bas/data
                   - name: logs
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/logs
-                  - name: liberty-config
+                  - name: overrides-dir
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/db-datasources.xml
+                    subPath: db-datasources.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ldap-registry.xml
+                    subPath: ldap-registry.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ssl-config.xml
+                    subPath: ssl-config.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/oidc-client.xml
+                    subPath: oidc-client.xml
                   - name: tls
                     mountPath: /shared/tls/pkcs12
             volumes:
@@ -457,6 +470,8 @@
               - name: logs
                 persistentVolumeClaim:
                   claimName: bastudio-logs-pvc
+              - name: overrides-dir
+                emptyDir: {}
               - name: liberty-config
                 configMap:
                   name: bastudio-liberty-config

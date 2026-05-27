@@ -150,6 +150,7 @@
 - name: Deploy UMS
   kubernetes.core.k8s:
     state: present
+    apply: true
     definition:
       apiVersion: apps/v1
       kind: Deployment
@@ -235,14 +236,29 @@
                 volumeMounts:
                   - name: data
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/apps
-                  - name: config
+                  - name: logs
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/logs
+                  - name: overrides-dir
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides
+                  - name: config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ums.xml
+                    subPath: ums.xml
+                  - name: config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ldap-registry.xml
+                    subPath: ldap-registry.xml
+                  - name: config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ssl-config.xml
+                    subPath: ssl-config.xml
                   - name: tls
                     mountPath: /shared/tls/pkcs12
             volumes:
               - name: data
                 persistentVolumeClaim:
                   claimName: ums-pvc
+              - name: logs
+                emptyDir: {}
+              - name: overrides-dir
+                emptyDir: {}
               - name: config
                 configMap:
                   name: ums-config
