@@ -128,7 +128,7 @@
             <openidConnectClient id="BAStudioOIDC"
               clientId="bastudio"
               clientSecret="${env.BASTUDIO_OIDC_CLIENT_SECRET}"
-              discoveryEndpointUrl="https://{{ baw_hostname }}/ums/oidc/endpoint/UMS/.well-known/openid-configuration"
+              discoveryEndpointUrl="https://{{ baw_hostname }}/ums/oidc/endpoint/ums/.well-known/openid-configuration"
               scope="openid profile email"
               redirectToRPHostAndPort="https://{{ baw_hostname }}"
               httpsRequired="true"
