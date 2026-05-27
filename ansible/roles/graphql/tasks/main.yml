@@ -121,26 +121,22 @@
                     memory: 2Gi
                     cpu: "1"
                 livenessProbe:
-                  httpGet:
-                    path: /content-services-graphql/
+                  tcpSocket:
                     port: 9080
-                    scheme: HTTP
                   initialDelaySeconds: 60
                   periodSeconds: 30
                   failureThreshold: 8
                 readinessProbe:
                   httpGet:
-                    path: /content-services-graphql/
+                    path: /content-services-graphql/ping
                     port: 9080
                     scheme: HTTP
                   initialDelaySeconds: 30
                   periodSeconds: 15
                   failureThreshold: 12
                 startupProbe:
-                  httpGet:
-                    path: /content-services-graphql/
+                  tcpSocket:
                     port: 9080
-                    scheme: HTTP
                   periodSeconds: 15
                   failureThreshold: 30
                 volumeMounts:
