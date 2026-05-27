@@ -102,6 +102,10 @@
                   - secretRef:
                       name: graphql-secret
                 env:
+                  - name: LICENSE
+                    value: "accept"
+                  - name: LICENSEMODEL
+                    value: "{{ baw_license }}"
                   - name: CPE_URI
                     value: "https://{{ cpe_host }}:{{ cpe_port }}/wsi/FNCEWS40MTOM/"
                   - name: disableFIPS
