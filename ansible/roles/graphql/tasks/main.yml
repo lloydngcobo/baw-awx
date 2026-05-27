@@ -127,10 +127,8 @@
                   periodSeconds: 30
                   failureThreshold: 8
                 readinessProbe:
-                  httpGet:
-                    path: /content-services-graphql/ping
+                  tcpSocket:
                     port: 9080
-                    scheme: HTTP
                   initialDelaySeconds: 30
                   periodSeconds: 15
                   failureThreshold: 12
