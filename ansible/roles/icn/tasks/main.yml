@@ -153,6 +153,7 @@
 - name: Deploy ICN Navigator
   kubernetes.core.k8s:
     state: present
+    apply: true
     definition:
       apiVersion: apps/v1
       kind: Deployment
@@ -275,8 +276,11 @@
                   # PostgreSQL JDBC driver — populated by icn-init-jdbc init container
                   - name: jdbc-drivers
                     mountPath: /opt/ibm/wlp/usr/shared/resources/db/postgres
-                  # Mount each Liberty override file individually (subPath) so the
-                  # overrides directory stays writable — ICN startup script may need it.
+                  # The overrides directory does NOT exist in the ICN image (only defaults/
+                  # is present). Mount an emptyDir here to provide a writable directory,
+                  # then subPath-mount each config file into it.
+                  - name: overrides-dir
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides
                   - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/db-datasources.xml
                     subPath: db-datasources.xml
@@ -295,6 +299,8 @@
               - name: logs
                 persistentVolumeClaim:
                   claimName: icn-logs-pvc
+              - name: overrides-dir
+                emptyDir: {}
               - name: jdbc-drivers
                 emptyDir: {}
               - name: liberty-config
