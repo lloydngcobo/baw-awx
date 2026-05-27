@@ -27,14 +27,19 @@
           app: baw-ums
       stringData:
         # Env var names MUST match what server.xml reads (${env.UMS_ADMINUSER}, etc.)
+        # server.xml mappings: UMS_ADMINUSER→ums.admin.user, UMS_APICLIENTID→ums.api.clientId, etc.
         UMS_ADMINUSER:              "{{ ums_admin_user }}"
         UMS_ADMINPASSWORD:          "{{ ums_admin_password }}"
         UMS_SSLKEYSTOREPASSWORD:    "{{ keystore_password }}"
         UMS_JWTKEYSTOREPASSWORD:    "{{ keystore_password }}"
         UMS_LTPAPASSWORD:           "{{ ltpa_password }}"
+        UMS_APICLIENTID:            "{{ ums_api_client_id }}"
         UMS_APICLIENTSECRET:        "{{ ums_api_client_secret }}"
+        UMS_INTERNALCLIENTID:       "{{ ums_internal_client_id }}"
         UMS_INTERNALCLIENTSECRET:   "{{ ums_internal_client_secret }}"
+        UMS_CLIENTMANAGERUSER:      "{{ ums_client_manager_user }}"
         UMS_CLIENTMANAGERPASSWORD:  "{{ ums_client_manager_pass }}"
+        UMS_SCIMREADERUSER:         "{{ ums_scim_reader_user }}"
         UMS_SCIMREADERPASSWORD:     "{{ ums_scim_reader_pass }}"
         LDAP_BIND_PASSWORD:         "{{ ldap_bind_password }}"
   no_log: true
@@ -312,7 +317,7 @@
 - name: Check if BAStudio OIDC client already registered
   ansible.builtin.shell: |
     oc exec -n {{ baw_namespace }} {{ _ums_pod.stdout }} --
-    curl -sk -u {{ ums_client_manager_user }}:{{ ums_client_manager_pass }}
+    curl -sk -u {{ ldap_admin_user }}:{{ ldap_admin_password }}
     "https://localhost:9443/oidc/endpoint/ums/registration/bastudio"
     -w "\n%{http_code}" 2>&1 | tail -1
   register: _bastudio_client_check
@@ -322,7 +327,7 @@
 - name: Register BAStudio OIDC client
   ansible.builtin.shell: |
     oc exec -n {{ baw_namespace }} {{ _ums_pod.stdout }} --
-    curl -sk -u {{ ums_client_manager_user }}:{{ ums_client_manager_pass }}
+    curl -sk -u {{ ldap_admin_user }}:{{ ldap_admin_password }}
     -X POST "https://localhost:9443/oidc/endpoint/ums/registration"
     -H "Content-Type: application/json"
     -d '{
@@ -346,7 +351,7 @@
 - name: Check if PSLiberty OIDC client already registered
   ansible.builtin.shell: |
     oc exec -n {{ baw_namespace }} {{ _ums_pod.stdout }} --
-    curl -sk -u {{ ums_client_manager_user }}:{{ ums_client_manager_pass }}
+    curl -sk -u {{ ldap_admin_user }}:{{ ldap_admin_password }}
     "https://localhost:9443/oidc/endpoint/ums/registration/psliberty"
     -w "\n%{http_code}" 2>&1 | tail -1
   register: _psliberty_client_check
@@ -356,7 +361,7 @@
 - name: Register PSLiberty OIDC client
   ansible.builtin.shell: |
     oc exec -n {{ baw_namespace }} {{ _ums_pod.stdout }} --
-    curl -sk -u {{ ums_client_manager_user }}:{{ ums_client_manager_pass }}
+    curl -sk -u {{ ldap_admin_user }}:{{ ldap_admin_password }}
     -X POST "https://localhost:9443/oidc/endpoint/ums/registration"
     -H "Content-Type: application/json"
     -d '{
