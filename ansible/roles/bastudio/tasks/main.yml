@@ -107,13 +107,27 @@
             <variable name="client_secret"         value="${env.BASTUDIO_OIDC_CLIENT_SECRET}"/>
 
             <!-- ── UMS ───────────────────────────────────────── -->
-            <variable name="ums_hostname"          value="{{ baw_hostname }}"/>
-            <variable name="ums_port"              value="443"/>
+            <!--
+              ums_hostname/ums_port point to the INTERNAL UMS service so that
+              server-side SCIM calls (post-login user lookup) go to the internal
+              URL and use the BAW Root CA (trusted by trusts.p12).
+              Setting ums_hostname to the external hostname would make BAStudio call
+              https://baw_hostname/ibm/api/scim/Users which hits the OCP router and
+              presents CN=*.apps.homelab.home.nl — a cert NOT in trusts.p12 (CWPKI0823E).
+
+              logout-domain-override.xml (also in this ConfigMap and mounted below)
+              overrides logoutPageRedirectDomainNames back to the external hostname,
+              since baw_server.xml derives that attribute from ${ums_hostname}.
+            -->
+            <variable name="ums_hostname"          value="ums-svc.{{ baw_namespace }}.svc.cluster.local"/>
+            <variable name="ums_port"              value="9443"/>
             <variable name="ums_admin_user"        value="{{ ums_admin_user }}"/>
             <variable name="ums_admin_password"    value="${env.BAS_ADMIN_PASSWORD}"/>
             <!--
               ums_urlprefix         : used for browser-facing OIDC authorize redirect
               ums_urlprefix_service_sso : used for server-to-server token/introspect/jwk calls
+              Both are hardcoded here (not derived from ums_hostname:ums_port) so that
+              the browser redirect still goes to the external URL.
             -->
             <variable name="ums_urlprefix"         value="https://{{ baw_hostname }}"/>
             <variable name="ums_urlprefix_service_sso"
@@ -247,6 +261,21 @@
           <server>
             <openidConnectClient id="umsClient"
               issuerIdentifier="https://{{ baw_hostname }}/oidc/endpoint/ums"/>
+          </server>
+
+        logout-domain-override.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!--
+            Fix logout redirect domain after setting ums_hostname to the internal service URL.
+            baw_server.xml (image default) sets:
+              logoutPageRedirectDomainNames="${ums_hostname}"
+            Since ums_hostname is now ums-svc.<ns>.svc.cluster.local (internal, for SCIM),
+            that attribute would be set to the internal hostname — blocking logout redirects
+            back to the external BAW hostname.
+            This override restores it to the external hostname.
+          -->
+          <server>
+            <webAppSecurity logoutPageRedirectDomainNames="{{ baw_hostname }}" />
           </server>
 
         ldap-registry.xml: |
@@ -781,6 +810,9 @@
                   - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/oidc-issuer-override.xml
                     subPath: oidc-issuer-override.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/logout-domain-override.xml
+                    subPath: logout-domain-override.xml
                   - name: tls
                     mountPath: /shared/tls/pkcs12
                   - name: startup-scripts
