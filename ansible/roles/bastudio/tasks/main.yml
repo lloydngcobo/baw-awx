@@ -8,7 +8,8 @@
 #   - Liberty runtime managed by supervisord
 #   - ALL configuration via Liberty variable substitution (${variable}) in
 #     configDropins/defaults/*.xml; overrides go in configDropins/overrides/
-#   - Default datasource is DB2; override with PostgreSQL via datasource.xml
+#   - Default datasource is DB2; image overrides with PostgreSQL when DB_TYPE=POSTGRESQL
+#     (database.sh copies 60Database.xml.PostgreSQL → config/system/ at Liberty startup)
 #   - DB schema created by: /opt/ibm/wlp/ibmProcessServer/bin/dbConfig defaultServer -create
 #   - No bootstrap.sh / content_init.sh / etc. — those scripts do not exist
 #   - OIDC, UMS JAAS, FileNet JAAS, LTPA all handled by defaults once
@@ -46,10 +47,13 @@
   no_log: true
 
 # ── Liberty config overrides ──────────────────────────────────────────────────
-# Four files land in configDropins/overrides/ and override the built-in defaults.
+# Three files land in configDropins/overrides/ and override the built-in defaults.
+# PostgreSQL datasource is handled by the image's 60Database.xml.PostgreSQL (installed
+# by database.sh when DB_TYPE=POSTGRESQL) + Liberty variables from processServer_variables.xml.
+# We do NOT mount a custom datasource.xml — doing so creates a duplicate <properties>
+# element for jdbc/TeamWorksDB (CWWKG0074E) since 60Database.xml.PostgreSQL is already live.
 #
 # processServer_variables.xml  — supplies every ${variable} used by default configs
-# datasource.xml               — replaces the default DB2 datasource with PostgreSQL
 # ssl.xml                      — points defaultKeyStore/TrustStore to our PKCS12 files
 # ldap-registry.xml            — WIM LDAP integration (baseDN = ldap_user_base, rdnProperty = cn)
 
@@ -126,10 +130,11 @@
         datasource.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
           <!--
-            Overrides the default DB2 datasource with PostgreSQL.
-            Same id="jdbc/TeamWorksDB" merges with — and wins over — the default.
-            The built-in PostgreSQL JDBC driver is at:
-              ${wlp.install.dir}/ibmProcessServer/lib/jdbcdrivers/PostgreSQL/postgresql.jar
+            Used ONLY by the db-init Job (dbConfig runs standalone, before database.sh
+            has installed 60Database.xml.PostgreSQL). Mounting this in the Deployment
+            would create a duplicate <properties> for jdbc/TeamWorksDB (CWWKG0074E)
+            because database.sh installs 60Database.xml.PostgreSQL during Liberty startup.
+            The Deployment therefore does NOT mount this file.
           -->
           <server>
             <library id="postgresqlJDBCLib">
@@ -199,11 +204,11 @@
               bindPassword="${env.LDAP_BIND_PASSWORD}"
               ldapType="Custom">
               <ldapEntityType name="PersonAccount">
-                <rdnProperty name="cn"/>
+                <rdnProperty name="cn" objectClass="inetOrgPerson"/>
                 <objectClass>inetOrgPerson</objectClass>
               </ldapEntityType>
               <ldapEntityType name="Group">
-                <rdnProperty name="cn"/>
+                <rdnProperty name="cn" objectClass="groupOfNames"/>
                 <objectClass>groupOfNames</objectClass>
                 <memberAttribute name="member"/>
               </ldapEntityType>
@@ -546,9 +551,6 @@
                   - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/processServer_variables.xml
                     subPath: processServer_variables.xml
-                  - name: liberty-config
-                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/datasource.xml
-                    subPath: datasource.xml
                   - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ssl.xml
                     subPath: ssl.xml
