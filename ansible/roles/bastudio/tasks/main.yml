@@ -601,7 +601,24 @@
                     /opt/ibm/wlp/ibmProcessServer/bin/dbConfig init defaultServer
                     RC=$?
                     echo "dbConfig exit code: $RC"
-                    exit $RC
+                    [ $RC -ne 0 ] && exit $RC
+
+                    # ── Step 5: set IsRepository=true in lsw_system ──
+                    # dbConfig init creates the BAW schema but does NOT insert the
+                    # IsRepository flag into lsw_system. ServerTypeUtil.isRepository()
+                    # reads lsw_system.propkey='IsRepository'; if missing, parseBoolean(null)
+                    # returns false → BAStudio reports "database is Workflow Runtime" and
+                    # the UI shows "/bas/BAStudio is not valid for this server type".
+                    # Insert the flag explicitly so the server starts in Workflow Authoring mode.
+                    echo "==> Step 5: set IsRepository=true in lsw_system..."
+                    PGPASSWORD="${BAS_DB_PASS}" psql \
+                      -h "${BAS_DB_HOST}" -p "${BAS_DB_PORT}" \
+                      -U "${BAS_DB_USER}" -d "${BAS_DB_NAME}" \
+                      -c "INSERT INTO ${BAS_DB_USER}.lsw_system (propkey, propvalue)
+                              VALUES ('IsRepository', 'true')
+                          ON CONFLICT (propkey) DO UPDATE SET propvalue = 'true';"
+                    echo "    IsRepository flag set"
+                    exit 0
                 env:
                   - name: BAS_ADMIN_PASSWORD
                     valueFrom:
