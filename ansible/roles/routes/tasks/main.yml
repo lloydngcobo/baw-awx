@@ -237,6 +237,33 @@
           name: bastudio-svc
   when: deploy_bastudio | default(true) | bool
 
+- name: Create BAStudio OIDC callback route
+  # Liberty's openidConnectClient redirects the browser to /oidcclient/redirect/umsClient
+  # after UMS authenticates the user. This path must be routed to bastudio-svc so Liberty
+  # can complete the OIDC code exchange. Without this route, post-login hits a 503.
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: bastudio-oidcclient-route
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+      spec:
+        host: "{{ baw_hostname }}"
+        path: /oidcclient
+        port:
+          targetPort: http
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+        to:
+          kind: Service
+          name: bastudio-svc
+  when: deploy_bastudio | default(true) | bool
+
 - name: Create BAW Runtime route
   kubernetes.core.k8s:
     state: present

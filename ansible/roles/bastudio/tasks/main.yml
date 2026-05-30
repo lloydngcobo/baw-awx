@@ -231,6 +231,24 @@
               httpsPort="9443"/>
           </server>
 
+        oidc-issuer-override.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!--
+            Fix issuer mismatch (CWWKS1751E):
+            oidc-rp.xml (image default) sets tokenEndpointUrl to the internal service URL
+            (ums_urlprefix_service_sso = https://ums-svc.<ns>.svc.cluster.local:9443).
+            Liberty derives the expected ID-token issuer from that base URL, giving:
+              https://ums-svc.<ns>.svc.cluster.local:9443/oidc/endpoint/ums
+            But UMS issues tokens with the external hostname as issuer:
+              https://<baw_hostname>/oidc/endpoint/ums
+            These differ, so token validation fails post-login.
+            This override explicitly sets issuerIdentifier to the external URL, fixing the mismatch.
+          -->
+          <server>
+            <openidConnectClient id="umsClient"
+              issuerIdentifier="https://{{ baw_hostname }}/oidc/endpoint/ums"/>
+          </server>
+
         ldap-registry.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
           <!--
@@ -760,6 +778,9 @@
                   - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ldap-registry.xml
                     subPath: ldap-registry.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/oidc-issuer-override.xml
+                    subPath: oidc-issuer-override.xml
                   - name: tls
                     mountPath: /shared/tls/pkcs12
                   - name: startup-scripts
