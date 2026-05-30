@@ -217,6 +217,57 @@
             </ldapRegistry>
           </server>
 
+- name: Create BAStudio fix-java-security ConfigMap (startup hook)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: bastudio-startup-scripts
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-bastudio
+      data:
+        00-fix-java-security.sh: |
+          #!/bin/bash
+          # Fix IBM Semeru 21 java.security for BAW container.
+          #
+          # Problem: The image's java.security lists IBM-proprietary providers
+          # (IBMJCE, IBMJSSEProvider2 etc.) that do NOT exist in IBM Semeru
+          # Certified Edition (OpenJDK-based). Provider 10 (sun.security.provider.Sun)
+          # is restricted to FIPS/RestrictedSecurity mode with the '#' suffix.
+          # baw-setup.sh tries to fix this via security_provider_disable_IBMJCEFIPS,
+          # but that file lacks a trailing newline, so the last line merges with the
+          # next '#' comment in java.security and Sun ends up restricted again.
+          #
+          # Fix: replace the entire provider list with standard OpenJDK providers.
+          # This runs in the liberty-start.sh pre-start hook (shared/scripts/*.sh),
+          # AFTER baw-setup.sh and BEFORE the Liberty JVM reads java.security.
+
+          SEC=/opt/ibm/java/conf/security/java.security
+
+          # Write the correct provider list to a temp file (heredoc guarantees
+          # a proper trailing newline — no merge issue).
+          cat > /tmp/jdk_providers.txt << 'PROVIDERS'
+          security.provider.1=sun.security.provider.Sun
+          security.provider.2=sun.security.rsa.SunRsaSign
+          security.provider.3=sun.security.ec.SunEC
+          security.provider.4=sun.security.ssl.SunJSSE
+          security.provider.5=com.sun.crypto.provider.SunJCE
+          security.provider.6=sun.security.jgss.SunProvider
+          security.provider.7=com.sun.security.sasl.Provider
+          security.provider.8=org.jcp.xml.dsig.internal.dom.XMLDSigRI
+          PROVIDERS
+
+          # Remove all existing security.provider.N= lines (any digit count).
+          sed -i '/^security\.provider\.[0-9]/d' "$SEC"
+
+          # Insert the new provider list after the canonical comment anchor.
+          sed -i "/# List of providers and their preference orders (see above):/r /tmp/jdk_providers.txt" "$SEC"
+
+          echo "00-fix-java-security: java.security providers replaced with standard JDK providers"
+
 # ── Storage ───────────────────────────────────────────────────────────────────
 
 - name: Create BAStudio data PVC
@@ -345,6 +396,8 @@
                     value: "POSTGRESQL"
                   - name: disableFIPS
                     value: "true"
+                  - name: IBMJCEPLUS_FIPS_ENABLED
+                    value: "false"
                   - name: TZ
                     value: "{{ timezone }}"
                 volumeMounts:
@@ -442,6 +495,8 @@
                     value: "POSTGRESQL"
                   - name: disableFIPS
                     value: "true"
+                  - name: IBMJCEPLUS_FIPS_ENABLED
+                    value: "false"
                   - name: TZ
                     value: "{{ timezone }}"
                   - name: JVM_HEAP_XMS
@@ -502,6 +557,9 @@
                     subPath: ldap-registry.xml
                   - name: tls
                     mountPath: /shared/tls/pkcs12
+                  - name: startup-scripts
+                    mountPath: /shared/scripts/00-fix-java-security.sh
+                    subPath: 00-fix-java-security.sh
             volumes:
               - name: data
                 persistentVolumeClaim:
@@ -522,6 +580,10 @@
                       path: server.p12
                     - key: trusts.p12
                       path: trusts.p12
+              - name: startup-scripts
+                configMap:
+                  name: bastudio-startup-scripts
+                  defaultMode: 0755
 
 - name: Create BAStudio Service
   kubernetes.core.k8s:
