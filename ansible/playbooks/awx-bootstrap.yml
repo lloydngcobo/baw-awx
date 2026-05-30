@@ -20,8 +20,9 @@
 #   Credential   : OpenShift API (K8s bearer token)
 #   Inventory    : BAW Localhost
 #   Job Templates:
-#     - BAW Full Install       (site.yml, all steps 1-12)
+#     - BAW Full Install       (site.yml, all steps 1-12, ask_tags_on_launch)
 #     - BAW Prereqs Only       (site.yml --tags prereqs, steps 1-4)
+#     - BAW BAStudio           (site.yml --tags bastudio, step 10 only)
 #     - BAW Teardown           (playbooks/teardown.yml)
 #     - BAW Configure ArgoCD   (site.yml --tags argocd)
 #   Workflow     : BAW Full Deploy (Prereqs → Approval → Full Deploy → ArgoCD)
@@ -185,6 +186,7 @@
         credentials:
           - "{{ awx_ocp_cred_name }}"
         ask_variables_on_launch: true
+        ask_tags_on_launch: true
         survey_enabled: true
         survey_spec:
           name: "BAW Full Install Survey"
@@ -393,6 +395,68 @@
         controller_password: "{{ awx_password }}"
         validate_certs: false
 
+    - name: Create job template — BAW BAStudio
+      awx.awx.job_template:
+        name: "BAW BAStudio"
+        description: "Deploy BAStudio only (step 10): bootstrap → content-init → deployment → workplace-init → case-init"
+        organization: "{{ awx_org_name }}"
+        project: "{{ awx_project_name }}"
+        playbook: "ansible/site.yml"
+        job_tags: "bastudio"
+        inventory: "{{ awx_inventory_name }}"
+        execution_environment: "{{ awx_ee_name }}"
+        credentials:
+          - "{{ awx_ocp_cred_name }}"
+        ask_variables_on_launch: true
+        survey_enabled: true
+        survey_spec:
+          name: "BAW BAStudio Survey"
+          description: ""
+          spec:
+            - question_name: "IBM Entitlement Key"
+              question_description: "From https://myibm.ibm.com/products-services/containerlibrary"
+              variable: ibm_entitlement_key
+              type: password
+              required: true
+              default: ""
+            - question_name: "UMS Admin Password"
+              question_description: "Password for bawadmin (BAS_ADMIN_PASSWORD)"
+              variable: ums_admin_password
+              type: password
+              required: true
+              default: ""
+            - question_name: "CPE Admin Password"
+              question_description: "Password for p8admin"
+              variable: cpe_admin_password
+              type: password
+              required: true
+              default: ""
+            - question_name: "Keystore Password (PKCS12)"
+              question_description: "Password for server.p12 / trusts.p12"
+              variable: keystore_password
+              type: password
+              required: true
+              default: ""
+            - question_name: "BAStudio OIDC Client Secret"
+              question_description: "Secret registered for the 'bastudio' OIDC client in UMS"
+              variable: bastudio_oidc_client_secret
+              type: password
+              required: true
+              default: ""
+            - question_name: "LDAP Bind Password"
+              question_description: "Password for cn=bindldap,ou=dev,dc=demodom,dc=nl"
+              variable: ldap_bind_password
+              type: password
+              required: true
+              default: ""
+        extra_vars:
+          ocp_api_url: "{{ ocp_api_url }}"
+        state: present
+        controller_host: "{{ awx_url }}"
+        controller_username: "{{ awx_username }}"
+        controller_password: "{{ awx_password }}"
+        validate_certs: false
+
     # ── Workflow ───────────────────────────────────────────────────────────────
 
     - name: Create workflow — BAW Full Deploy
@@ -537,8 +601,9 @@
           - "    EE           : {{ awx_ee_name }} ({{ baw_ee_image }})"
           - ""
           - "  Job Templates:"
-          - "    - BAW Full Install"
-          - "    - BAW Prereqs Only"
+          - "    - BAW Full Install       (all steps, ask_tags_on_launch enabled)"
+          - "    - BAW Prereqs Only       (steps 1-4)"
+          - "    - BAW BAStudio           (step 10 only)"
           - "    - BAW Teardown"
           - "    - BAW Configure ArgoCD"
           - ""
