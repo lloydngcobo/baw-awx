@@ -339,6 +339,10 @@
                       secretKeyRef:
                         name: bastudio-secret
                         key: LDAP_BIND_PASSWORD
+                  - name: LIBERTY_SERVER_NAME
+                    value: "defaultServer"
+                  - name: DB_TYPE
+                    value: "POSTGRESQL"
                   - name: disableFIPS
                     value: "true"
                   - name: TZ
@@ -432,6 +436,10 @@
                       secretKeyRef:
                         name: bastudio-secret
                         key: BASTUDIO_OIDC_CLIENT_SECRET
+                  - name: LIBERTY_SERVER_NAME
+                    value: "defaultServer"
+                  - name: DB_TYPE
+                    value: "POSTGRESQL"
                   - name: disableFIPS
                     value: "true"
                   - name: TZ
