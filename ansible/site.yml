@@ -129,7 +129,7 @@
       tags: [ums, step8]
       when: deploy_ums | default(true) | bool
 
-    # Step 9 — OpenShift Routes (passthrough TLS)
+    # Step 9 — OpenShift Routes (edge TLS for most; reencrypt for UMS)
     - role: routes
       tags: [routes, step9]
 

@@ -54,12 +54,12 @@ timezone: "Europe/Amsterdam"
 ldap_host:          "ldap-svc.infra.svc.cluster.local"
 ldap_port:          "9389"
 ldap_base_dn:       "dc=demodom,dc=nl"
-ldap_bind_dn:       "uid=bindldap,ou=dev,dc=demodom,dc=nl"
-ldap_bind_password: "Password12"   # REQUIRED — must match ISVD seed (uid=bindldap userPassword)
+ldap_bind_dn:       "cn=bindldap,ou=dev,dc=demodom,dc=nl"
+ldap_bind_password: "Password1"    # REQUIRED — must match ISVD seed (cn=bindldap userPassword)
 ldap_user_base:     "ou=dev,dc=demodom,dc=nl"
 ldap_group_base:    "ou=dev,dc=demodom,dc=nl"
 ldap_admin_user:    "bawadmin"
-ldap_admin_password:  "Password12" # REQUIRED — min 2 non-alpha chars (ISVD policy)
+ldap_admin_password:  "Password1"  # REQUIRED — min 2 non-alpha chars (ISVD policy)
 ldap_isvd_license_key: ""          # REQUIRED — set in AWX survey (never commit the real key)
 
 # =============================================================================

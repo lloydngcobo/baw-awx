@@ -94,6 +94,18 @@
             <variable name="ums.teamserver.admingroup"     value="" />
             <variable name="ums.scimReaderUser"           value="{{ ums_scim_reader_user }}" />
 
+            <!-- ── Internal technical users (not in LDAP) ────────────────── -->
+            <!-- Liberty merges <basicRegistry> elements with the same id.   -->
+            <!-- basic-registry.xml already registers the admin user; this   -->
+            <!-- block adds the clientManager and scimReader service accounts -->
+            <!-- so UMS can auto-register OIDC clients and handle SCIM calls. -->
+            <basicRegistry id="basicRegistry">
+              <user name="${ums.oauth.clientmanager.user}"
+                    password="${ums.oauth.clientmanager.password}" />
+              <user name="${ums.scimReaderUser}"
+                    password="${ums.scimReaderPassword}" />
+            </basicRegistry>
+
             <!-- ── SSL — PKCS12 (override default JKS) ──────────────────── -->
             <variable name="ums.ssl.keystore.type"         value="PKCS12" />
             <variable name="ums.ssl.keystore.location"     value="/shared/tls/pkcs12/server.p12" />
@@ -112,16 +124,19 @@
             <variable name="ums.health.logHealthFailuresOnStartup" value="false" />
 
             <!-- ── LDAP registry for user authentication ─────────────────── -->
+            <!-- baseDN must be the OU where users live (not the tree root).  -->
+            <!-- With rdnProperty="cn", Liberty constructs bind DNs as        -->
+            <!-- cn=<user>,<baseDN> — matching ISVD's actual entry format.    -->
             <ldapRegistry id="LDAPUserRegistry"
               realm="defaultWIMFileBasedRealm"
               host="{{ ldap_host }}"
               port="{{ ldap_port }}"
-              baseDN="{{ ldap_base_dn }}"
+              baseDN="{{ ldap_user_base }}"
               bindDN="{{ ldap_bind_dn }}"
               bindPassword="${env.LDAP_BIND_PASSWORD}"
               ldapType="Custom">
               <ldapEntityType name="PersonAccount">
-                <rdnProperty name="uid"/>
+                <rdnProperty name="cn"/>
                 <objectClass>inetOrgPerson</objectClass>
               </ldapEntityType>
               <ldapEntityType name="Group">

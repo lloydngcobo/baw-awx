@@ -69,12 +69,12 @@
               realm="defaultWIMFileBasedRealm"
               host="{{ ldap_host }}"
               port="{{ ldap_port }}"
-              baseDN="{{ ldap_base_dn }}"
+              baseDN="{{ ldap_user_base }}"
               bindDN="{{ ldap_bind_dn }}"
               bindPassword="${env.LDAP_BIND_PASSWORD}"
               ldapType="Custom">
               <ldapEntityType name="PersonAccount">
-                <rdnProperty name="uid"/>
+                <rdnProperty name="cn"/>
                 <objectClass>inetOrgPerson</objectClass>
               </ldapEntityType>
               <ldapEntityType name="Group">

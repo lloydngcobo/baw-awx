@@ -138,14 +138,63 @@
   changed_when: true
   no_log: true
 
-- name: Build trusts.p12 (CA cert only — truststore for pods)
-  ansible.builtin.shell: >
-    openssl pkcs12 -export
-    -nokeys
-    -in {{ cert_work_dir }}/ca.crt
-    -out {{ cert_work_dir }}/trusts.p12
-    -passout pass:{{ keystore_password }}
-    -name "baw-ca"
+- name: Write trusts.p12 creation script
+  ansible.builtin.copy:
+    dest: "{{ cert_work_dir }}/make-trusts.py"
+    mode: "0700"
+    content: |
+      #!/usr/bin/env python3
+      # Creates a Java-compatible PKCS12 truststore from a PEM CA certificate.
+      # openssl pkcs12 -export -nokeys produces an empty truststore because Java
+      # requires certBag entries without localKeyId to recognise trusted CA entries.
+      # cryptography >=44 exposes serialize_java_truststore() for exactly this;
+      # older versions fall back to serialize_key_and_certificates() whose 'cas'
+      # argument also produces certBag entries without localKeyId (JDK 9+ reads
+      # those as trustedCertEntry).
+      import sys
+      from cryptography import x509
+      from cryptography.hazmat.primitives.serialization import BestAvailableEncryption
+      from cryptography.hazmat.primitives.serialization.pkcs12 import PKCS12Certificate
+
+      ca_cert_path    = sys.argv[1]
+      truststore_path = sys.argv[2]
+      password        = sys.argv[3].encode()
+
+      with open(ca_cert_path, "rb") as f:
+          ca_cert = x509.load_pem_x509_certificate(f.read())
+
+      p12_cert = PKCS12Certificate(cert=ca_cert, friendly_name=b"baw-root-ca")
+
+      try:
+          # cryptography >= 44.0 — designed for Java truststore output
+          from cryptography.hazmat.primitives.serialization.pkcs12 import serialize_java_truststore
+          data = serialize_java_truststore(
+              certs=[p12_cert],
+              encryption_algorithm=BestAvailableEncryption(password),
+          )
+      except ImportError:
+          # cryptography 41-43 fallback — cas= adds certBag without localKeyId
+          from cryptography.hazmat.primitives.serialization.pkcs12 import serialize_key_and_certificates
+          data = serialize_key_and_certificates(
+              name=None,
+              key=None,
+              cert=None,
+              cas=[p12_cert],
+              encryption_algorithm=BestAvailableEncryption(password),
+          )
+
+      with open(truststore_path, "wb") as f:
+          f.write(data)
+  when: not _p12_stat.stat.exists
+
+- name: Build trusts.p12 (CA cert as Java-compatible trusted cert entry)
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ cert_work_dir }}/make-trusts.py"
+      - "{{ cert_work_dir }}/ca.crt"
+      - "{{ cert_work_dir }}/trusts.p12"
+      - "{{ keystore_password }}"
   when: not _p12_stat.stat.exists
   changed_when: true
   no_log: true
