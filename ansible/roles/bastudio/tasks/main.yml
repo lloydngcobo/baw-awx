@@ -10,7 +10,10 @@
 #     configDropins/defaults/*.xml; overrides go in configDropins/overrides/
 #   - Default datasource is DB2; image overrides with PostgreSQL when DB_TYPE=POSTGRESQL
 #     (database.sh copies 60Database.xml.PostgreSQL → config/system/ at Liberty startup)
-#   - DB schema created by: /opt/ibm/wlp/ibmProcessServer/bin/dbConfig defaultServer -create
+#   - DB schema created by: /opt/ibm/wlp/ibmProcessServer/bin/dbConfig init defaultServer
+#   - workflow-authoring:25.0.1 does NOT ship a PostgreSQL JDBC driver; it must be
+#     downloaded at startup (02-download-postgresql-driver.sh) into the emptyDir volume
+#     mounted at jdbcdrivers/PostgreSQL/ (same path datasource.xml.PostgreSQL references)
 #   - No bootstrap.sh / content_init.sh / etc. — those scripts do not exist
 #   - OIDC, UMS JAAS, FileNet JAAS, LTPA all handled by defaults once
 #     variables are supplied
@@ -21,7 +24,7 @@
 #   1. bastudio-secret        — all passwords as env vars
 #   2. bastudio-liberty-config ConfigMap — four override XML files
 #   3. PVCs
-#   4. bastudio-db-init Job   — dbConfig defaultServer -create (PostgreSQL schema)
+#   4. bastudio-db-init Job   — dbConfig init defaultServer (PostgreSQL schema)
 #   5. BAStudio Deployment + Service
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
@@ -47,13 +50,16 @@
   no_log: true
 
 # ── Liberty config overrides ──────────────────────────────────────────────────
-# Three files land in configDropins/overrides/ and override the built-in defaults.
+# Four files land in configDropins/overrides/ and override the built-in defaults.
 # PostgreSQL datasource is handled by the image's 60Database.xml.PostgreSQL (installed
 # by database.sh when DB_TYPE=POSTGRESQL) + Liberty variables from processServer_variables.xml.
 # We do NOT mount a custom datasource.xml — doing so creates a duplicate <properties>
 # element for jdbc/TeamWorksDB (CWWKG0074E) since 60Database.xml.PostgreSQL is already live.
 #
 # processServer_variables.xml  — supplies every ${variable} used by default configs
+# transport.xml                — overrides httpEndpoint to bind on container ports (9080/9443)
+#                                server.xml uses ${http_port}=-1 and ${https_port}=443 which are
+#                                unusable inside the pod (HTTP disabled, HTTPS port privileged)
 # ssl.xml                      — points defaultKeyStore/TrustStore to our PKCS12 files
 # ldap-registry.xml            — WIM LDAP integration (baseDN = ldap_user_base, rdnProperty = cn)
 
@@ -130,11 +136,18 @@
         datasource.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
           <!--
-            Used ONLY by the db-init Job (dbConfig runs standalone, before database.sh
-            has installed 60Database.xml.PostgreSQL). Mounting this in the Deployment
-            would create a duplicate <properties> for jdbc/TeamWorksDB (CWWKG0074E)
-            because database.sh installs 60Database.xml.PostgreSQL during Liberty startup.
-            The Deployment therefore does NOT mount this file.
+            REFERENCE ONLY — not currently mounted by any pod or Job.
+
+            Previously mounted into the DB init Job's configDropins/overrides/ but removed
+            because it produced CWWKG0074E: both defaults/datasource.xml (DB2) and
+            overrides/datasource.xml (this file, PostgreSQL) merge for the same
+            id="jdbc/TeamWorksDB", creating two <properties.*> children (max 1 allowed).
+
+            The DB init Job now instead copies datasource.xml.PostgreSQL over
+            datasource.xml inside configDropins/defaults/ at job start — same technique
+            as 01-activate-postgresql-ds.sh uses for the Deployment.
+
+            Kept here as documentation of the correct PostgreSQL datasource structure.
           -->
           <server>
             <library id="postgresqlJDBCLib">
@@ -185,6 +198,37 @@
               sslProtocol="TLSv1.2"/>
 
             <sslDefault sslRef="defaultSSLConfig"/>
+          </server>
+
+        transport.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!--
+            Override the Liberty httpEndpoint to bind on container ports, NOT external ports.
+
+            The image's server.xml sets:
+              httpPort  = ${http_port}   → our variable = -1  (HTTP intentionally disabled)
+              httpsPort = ${https_port}  → our variable = 443 (external port, privileged, can't bind)
+              host      = ${hostname}    → our variable = baw.apps.homelab.home.nl
+                                            resolves to the OpenShift router IP, not the pod IP
+
+            All three prevent Liberty from opening any listener inside the container:
+              - http_port=-1   → port 9080 never opens → health probes always fail
+              - https_port=443 → privileged port (< 1024) → bind fails for UID 1000140000
+              - host=<ext>     → binds to router IP, not pod IP → in-cluster connections refused
+
+            This override fixes all three by hardcoding container-side values.
+            ${https_port}=443 is still used by oidc-rp.xml for the external redirect URL
+            (redirectToRPHostAndPort="https://${hostname}:${https_port}") — that stays correct.
+
+            Liberty config-merge semantics: overrides/ wins over defaults/ and server.xml for
+            each attribute. Child elements (sslOptions, tcpOptions, etc.) from server.xml are
+            preserved since we only override attributes on the httpEndpoint element itself.
+          -->
+          <server>
+            <httpEndpoint id="defaultHttpEndpoint"
+              host="*"
+              httpPort="9080"
+              httpsPort="9443"/>
           </server>
 
         ldap-registry.xml: |
@@ -273,6 +317,74 @@
 
           echo "00-fix-java-security: java.security providers replaced with standard JDK providers"
 
+        01-activate-postgresql-ds.sh: |
+          #!/bin/bash
+          # Activate the PostgreSQL Liberty datasource in configDropins/defaults/ when
+          # DB_TYPE=POSTGRESQL.
+          #
+          # WHY: LibertyConfigurationOfflineSpi.getDatabaseInfo() reads db_type from Liberty
+          # variables (processServer_variables.xml) and resolves the JDBC driver classpath
+          # from configDropins/defaults/datasource.xml via ConfigUtil.getConfigFilePath().
+          # The default datasource.xml ships pointing to DB2JCC4Lib. When db_type=PostgreSQL
+          # the code expects the PostgreSQL driver (org.postgresql.Driver) to be in
+          # postgresqlJDBCLib — but the DB2 JAR doesn't contain it → ConfigException.
+          #
+          # The image ships datasource.xml.PostgreSQL alongside datasource.xml in
+          # configDropins/defaults/. We simply activate it here, exactly as database.sh
+          # activates 60Database.xml.PostgreSQL for the SQL-statements file.
+          #
+          # NOTE: Do NOT additionally mount datasource.xml in configDropins/overrides/.
+          # Liberty merges defaults+overrides for the same datasource id, producing two
+          # <properties> child elements (max 1 allowed) → CWWKG0074E.
+
+          DEFAULTS="/opt/ibm/wlp/usr/servers/defaultServer/configDropins/defaults"
+
+          if [[ "${DB_TYPE^^}" == "POSTGRESQL" ]]; then
+              cp "${DEFAULTS}/datasource.xml.PostgreSQL" "${DEFAULTS}/datasource.xml"
+              echo "01-activate-postgresql-ds: datasource.xml.PostgreSQL activated as datasource.xml"
+          fi
+
+        02-download-postgresql-driver.sh: |
+          #!/bin/bash
+          # Download the PostgreSQL JDBC driver JAR at container startup.
+          #
+          # WHY: workflow-authoring:25.0.1 does NOT ship a PostgreSQL JDBC driver.
+          # Only DB2/db2jcc4.jar exists under ibmProcessServer/lib/jdbcdrivers/.
+          # ValidateDatabaseInitialized (OSGi bundle com.ibm.workflow.ps.config.impl)
+          # is called during Liberty startup. Its Activator.start() calls
+          # LibertyConfigurationOfflineSpi.getDatabaseInfo() which:
+          #   1. Reads db_type from Liberty variables (processServer_variables.xml)
+          #   2. Reads the datasource.xml server/library/fileset XPath to build the
+          #      JDBC driver classpath
+          #   3. Uses URLClassLoader + Class.forName("org.postgresql.Driver") to
+          #      load the driver
+          # Without the JAR at the path referenced in datasource.xml it throws:
+          #   ConfigException: org.postgresql.Driver
+          #   Caused by: ClassNotFoundException: org.postgresql.Driver
+          #
+          # datasource.xml.PostgreSQL (image-provided, activated by 01-activate-postgresql-ds.sh)
+          # references: ${wlp.install.dir}/ibmProcessServer/lib/jdbcdrivers/PostgreSQL/postgresql.jar
+          # An emptyDir volume is mounted at that path in the pod spec, making it writable.
+
+          DRIVER_DIR="/opt/ibm/wlp/ibmProcessServer/lib/jdbcdrivers/PostgreSQL"
+          DRIVER_JAR="${DRIVER_DIR}/postgresql.jar"
+          JDBC_URL="https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar"
+
+          if [[ -f "${DRIVER_JAR}" ]]; then
+              echo "02-download-postgresql-driver: JAR already present at ${DRIVER_JAR} — skipping"
+              exit 0
+          fi
+
+          echo "02-download-postgresql-driver: Downloading PostgreSQL JDBC driver from Maven Central..."
+          curl -sSf --connect-timeout 30 --retry 3 --retry-delay 5 \
+               -o "${DRIVER_JAR}" "${JDBC_URL}"
+          RC=$?
+          if [[ $RC -ne 0 ]]; then
+              echo "02-download-postgresql-driver: ERROR — curl failed (exit ${RC}). Check cluster internet access."
+              exit $RC
+          fi
+          echo "02-download-postgresql-driver: Driver saved → $(ls -lh ${DRIVER_JAR})"
+
 # ── Storage ───────────────────────────────────────────────────────────────────
 
 - name: Create BAStudio data PVC
@@ -312,9 +424,25 @@
         storageClassName: "{{ storage_class_name }}"
 
 # ── DB init Job ───────────────────────────────────────────────────────────────
-# Runs dbConfig defaultServer -create to initialise the BAW PostgreSQL schema.
-# Only needs the DB-related overrides (processServer_variables.xml + datasource.xml)
-# and the secret env vars for db_user / db_password.
+# Runs dbConfig init defaultServer to initialise the BAW PostgreSQL schema.
+#
+# Root cause analysis (verified by introspection):
+#   1. LibertyConfigurationOfflineSpi cannot expand ${env.X} references at runtime.
+#   2. The image ships overrides/datasource.xml (DB2) which beats defaults/datasource.xml
+#      (PostgreSQL) alphabetically; must be removed before dbConfig runs.
+#   3. processServer_variables_system.xml in overrides/ has @placeholder@ values for ALL
+#      DB variables; it sorts AFTER our ConfigMap file so it overwrites db_user/db_pass/etc.
+#      with @placeholder@, causing NullPointerException in DatabaseInfo.getUser().
+#   4. Solution: write z-db-init-credentials.xml (z-prefix sorts last) with literal
+#      bash-expanded values AND redefine postgresqlJDBCLib with an absolute path so
+#      the offline SPI doesn't need to expand ${wlp.install.dir}.
+#
+# Steps performed:
+#   1. Activate PostgreSQL datasource in configDropins/defaults/
+#   1b. Remove the image's DB2 overrides/datasource.xml
+#   2. Download PostgreSQL JDBC driver into emptyDir at jdbcdrivers/PostgreSQL/
+#   3. Write overrides/z-db-init-credentials.xml with literal DB credentials + absolute library path
+#   4. Run dbConfig init defaultServer
 
 - name: Delete previous db-init Job (if any)
   kubernetes.core.k8s:
@@ -327,7 +455,7 @@
         namespace: "{{ baw_namespace }}"
   ignore_errors: true
 
-- name: Run BAStudio DB init Job (dbConfig defaultServer -create)
+- name: Run BAStudio DB init Job (dbConfig init defaultServer)
   kubernetes.core.k8s:
     state: present
     definition:
@@ -359,8 +487,71 @@
                   - /bin/sh
                   - -c
                   - |
-                    echo "Starting BAW DB initialisation..."
-                    /opt/ibm/wlp/ibmProcessServer/bin/dbConfig defaultServer -create
+                    set -e
+
+                    OVERRIDES=/opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides
+                    DEFAULTS=/opt/ibm/wlp/usr/servers/defaultServer/configDropins/defaults
+                    DRIVER_DIR=/opt/ibm/wlp/ibmProcessServer/lib/jdbcdrivers/PostgreSQL
+
+                    # ── Step 1: activate PostgreSQL datasource in configDropins/defaults/ ──
+                    echo "==> Step 1: activate PostgreSQL datasource in defaults/..."
+                    cp "${DEFAULTS}/datasource.xml.PostgreSQL" "${DEFAULTS}/datasource.xml"
+                    echo "    datasource.xml.PostgreSQL activated"
+
+                    # ── Step 1b: remove image-default DB2 overrides/datasource.xml ──
+                    # The image ships overrides/datasource.xml (DB2 config).
+                    # overrides/ beats defaults/, so it would shadow the PostgreSQL datasource.
+                    # Removing it lets defaults/datasource.xml (PostgreSQL) take effect.
+                    echo "==> Step 1b: remove image-default DB2 overrides/datasource.xml..."
+                    if [ -f "${OVERRIDES}/datasource.xml" ]; then
+                        rm -f "${OVERRIDES}/datasource.xml"
+                        echo "    Removed overrides/datasource.xml (image DB2 default)"
+                    else
+                        echo "    overrides/datasource.xml not present — skipping"
+                    fi
+
+                    # ── Step 2: download PostgreSQL JDBC driver ──
+                    echo "==> Step 2: download PostgreSQL JDBC driver..."
+                    curl -sSf --connect-timeout 30 --retry 3 --retry-delay 5 \
+                         -o "${DRIVER_DIR}/postgresql.jar" \
+                         "https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar"
+                    echo "    Driver: $(ls -lh ${DRIVER_DIR}/postgresql.jar)"
+
+                    # ── Step 3: write z-db-init-credentials.xml ──
+                    # Writes a Liberty XML override that:
+                    # (a) Supplies all DB variables as LITERAL values (processServer_variables_system.xml
+                    #     in overrides/ has @placeholder@ strings that beat our ConfigMap's ${env.X}
+                    #     refs alphabetically — z-file sorts last and wins).
+                    # (b) Redefines postgresqlJDBCLib with an absolute path so the offline SPI
+                    #     (LibertyConfigurationOfflineSpi) does not need to expand ${wlp.install.dir}.
+                    echo "==> Step 3: write z-db-init-credentials.xml..."
+                    cat > "${OVERRIDES}/z-db-init-credentials.xml" << 'XMLEOF'
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <server>
+                      <variable name="db_type"     value="POSTGRESQL"/>
+                      <variable name="db_name"     value="DBNAME_PH"/>
+                      <variable name="db_host"     value="DBHOST_PH"/>
+                      <variable name="db_port"     value="DBPORT_PH"/>
+                      <variable name="db_user"     value="DBUSER_PH"/>
+                      <variable name="db_password" value="DBPASS_PH"/>
+                      <library id="postgresqlJDBCLib">
+                        <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/jdbcdrivers/PostgreSQL"
+                                 includes="postgresql.jar"/>
+                      </library>
+                    </server>
+                    XMLEOF
+                    sed -i \
+                      "s|DBNAME_PH|${BAS_DB_NAME}|g; \
+                       s|DBHOST_PH|${BAS_DB_HOST}|g; \
+                       s|DBPORT_PH|${BAS_DB_PORT}|g; \
+                       s|DBUSER_PH|${BAS_DB_USER}|g; \
+                       s|DBPASS_PH|${BAS_DB_PASS}|g" \
+                      "${OVERRIDES}/z-db-init-credentials.xml"
+                    echo "    Written (db_user=${BAS_DB_USER}, db_name=${BAS_DB_NAME}, db_host=${BAS_DB_HOST}:${BAS_DB_PORT})"
+
+                    # ── Step 4: create BAW schema ──
+                    echo "==> Step 4: dbConfig init defaultServer..."
+                    /opt/ibm/wlp/ibmProcessServer/bin/dbConfig init defaultServer
                     RC=$?
                     echo "dbConfig exit code: $RC"
                     exit $RC
@@ -380,6 +571,12 @@
                       secretKeyRef:
                         name: bastudio-secret
                         key: BAS_DB_PASS
+                  - name: BAS_DB_NAME
+                    value: "{{ bas_db_name }}"
+                  - name: BAS_DB_HOST
+                    value: "{{ postgres_host }}"
+                  - name: BAS_DB_PORT
+                    value: "{{ postgres_port }}"
                   - name: KEYSTORE_PASSWORD
                     valueFrom:
                       secretKeyRef:
@@ -409,13 +606,16 @@
                   - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/processServer_variables.xml
                     subPath: processServer_variables.xml
-                  - name: liberty-config
-                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/datasource.xml
-                    subPath: datasource.xml
+                  # emptyDir at the PostgreSQL driver path — guarantees writability so curl
+                  # can place postgresql.jar there regardless of image filesystem ownership.
+                  - name: postgresql-jdbc-driver
+                    mountPath: /opt/ibm/wlp/ibmProcessServer/lib/jdbcdrivers/PostgreSQL
             volumes:
               - name: liberty-config
                 configMap:
                   name: bastudio-liberty-config
+              - name: postgresql-jdbc-driver
+                emptyDir: {}
 
 - name: Wait for DB init Job to complete
   ansible.builtin.shell: >
@@ -555,6 +755,9 @@
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ssl.xml
                     subPath: ssl.xml
                   - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/transport.xml
+                    subPath: transport.xml
+                  - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ldap-registry.xml
                     subPath: ldap-registry.xml
                   - name: tls
@@ -562,6 +765,17 @@
                   - name: startup-scripts
                     mountPath: /shared/scripts/00-fix-java-security.sh
                     subPath: 00-fix-java-security.sh
+                  - name: startup-scripts
+                    mountPath: /shared/scripts/01-activate-postgresql-ds.sh
+                    subPath: 01-activate-postgresql-ds.sh
+                  - name: startup-scripts
+                    mountPath: /shared/scripts/02-download-postgresql-driver.sh
+                    subPath: 02-download-postgresql-driver.sh
+                  # emptyDir at the PostgreSQL driver path — writable for the download script
+                  # regardless of image filesystem ownership; also shadows the (absent) image
+                  # directory so 01-activate-postgresql-ds.sh doesn't fail if it doesn't exist.
+                  - name: postgresql-jdbc-driver
+                    mountPath: /opt/ibm/wlp/ibmProcessServer/lib/jdbcdrivers/PostgreSQL
             volumes:
               - name: data
                 persistentVolumeClaim:
@@ -586,6 +800,8 @@
                 configMap:
                   name: bastudio-startup-scripts
                   defaultMode: 0755
+              - name: postgresql-jdbc-driver
+                emptyDir: {}
 
 - name: Create BAStudio Service
   kubernetes.core.k8s:

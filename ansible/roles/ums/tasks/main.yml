@@ -351,17 +351,46 @@
       "client_name": "BAStudio",
       "redirect_uris": [
         "https://{{ baw_hostname }}/bas/redirect_uri",
-        "https://{{ baw_hostname }}/bas/jsp/logoutCallback.jsp"
+        "https://{{ baw_hostname }}/bas/jsp/logoutCallback.jsp",
+        "https://{{ baw_hostname }}/oidcclient/redirect/umsClient"
       ],
-      "grant_types": ["authorization_code","refresh_token","client_credentials"],
-      "response_types": ["code"],
+      "grant_types": ["authorization_code","refresh_token","client_credentials","password","implicit","urn:ietf:params:oauth:grant-type:jwt-bearer"],
+      "response_types": ["code","id_token token","token"],
       "token_endpoint_auth_method": "client_secret_post",
-      "scope": "openid profile email"
+      "scope": "openid profile email",
+      "preauthorized_scope": "openid profile email",
+      "introspect_tokens": true
     }' 2>&1
   register: _bastudio_client_reg
   changed_when: true
   no_log: true
   when: _bastudio_client_check.stdout != '200'
+
+- name: Ensure BAStudio OIDC client has preauthorized_scope (PUT update for existing clients)
+  ansible.builtin.shell: |
+    oc exec -n {{ baw_namespace }} {{ _ums_pod.stdout }} --
+    curl -sk -u {{ ldap_admin_user }}:{{ ldap_admin_password }}
+    -X PUT "https://localhost:9443/oidc/endpoint/ums/registration/bastudio"
+    -H "Content-Type: application/json"
+    -d '{
+      "client_id": "bastudio",
+      "client_secret": "{{ bastudio_oidc_client_secret }}",
+      "client_name": "BAStudio",
+      "redirect_uris": [
+        "https://{{ baw_hostname }}/bas/redirect_uri",
+        "https://{{ baw_hostname }}/bas/jsp/logoutCallback.jsp",
+        "https://{{ baw_hostname }}/oidcclient/redirect/umsClient"
+      ],
+      "grant_types": ["authorization_code","refresh_token","client_credentials","password","implicit","urn:ietf:params:oauth:grant-type:jwt-bearer"],
+      "response_types": ["code","id_token token","token"],
+      "token_endpoint_auth_method": "client_secret_post",
+      "scope": "openid profile email",
+      "preauthorized_scope": "openid profile email",
+      "introspect_tokens": true
+    }' 2>&1
+  register: _bastudio_client_update
+  changed_when: true
+  no_log: true
 
 - name: Check if PSLiberty OIDC client already registered
   ansible.builtin.shell: |
@@ -384,10 +413,12 @@
       "client_secret": "{{ ums_internal_client_secret }}",
       "client_name": "PSLiberty",
       "redirect_uris": ["https://{{ baw_hostname }}/bas/redirect_uri"],
-      "grant_types": ["authorization_code","refresh_token","client_credentials","password"],
-      "response_types": ["code"],
+      "grant_types": ["authorization_code","refresh_token","client_credentials","password","implicit","urn:ietf:params:oauth:grant-type:jwt-bearer"],
+      "response_types": ["code","id_token token","token"],
       "token_endpoint_auth_method": "client_secret_post",
-      "scope": "openid profile email"
+      "scope": "openid profile email",
+      "preauthorized_scope": "openid profile email",
+      "introspect_tokens": true
     }' 2>&1
   register: _psliberty_reg
   changed_when: true
@@ -396,6 +427,28 @@
     'already exists' not in _psliberty_reg.stdout | lower
   no_log: true
   when: _psliberty_client_check.stdout != '200'
+
+- name: Ensure PSLiberty OIDC client has preauthorized_scope (PUT update for existing clients)
+  ansible.builtin.shell: |
+    oc exec -n {{ baw_namespace }} {{ _ums_pod.stdout }} --
+    curl -sk -u {{ ldap_admin_user }}:{{ ldap_admin_password }}
+    -X PUT "https://localhost:9443/oidc/endpoint/ums/registration/psliberty"
+    -H "Content-Type: application/json"
+    -d '{
+      "client_id": "psliberty",
+      "client_secret": "{{ ums_internal_client_secret }}",
+      "client_name": "PSLiberty",
+      "redirect_uris": ["https://{{ baw_hostname }}/bas/redirect_uri"],
+      "grant_types": ["authorization_code","refresh_token","client_credentials","password","implicit","urn:ietf:params:oauth:grant-type:jwt-bearer"],
+      "response_types": ["code","id_token token","token"],
+      "token_endpoint_auth_method": "client_secret_post",
+      "scope": "openid profile email",
+      "preauthorized_scope": "openid profile email",
+      "introspect_tokens": true
+    }' 2>&1
+  register: _psliberty_update
+  changed_when: true
+  no_log: true
 
 - name: UMS summary
   ansible.builtin.debug:
