@@ -1,16 +1,27 @@
 ---
 # Role: bastudio
-# Deploys IBM BAStudio (Business Automation Studio) workflow authoring environment.
-# Requires: CPE, ICN, UMS all running.
+# Deploys IBM BAStudio (Business Automation Workflow — authoring) 25.0.1
 #
-# Job sequence (must complete in order):
-#   1. bastudio-bootstrap     — initializes BAStudio DB and UMS registration
-#   2. bastudio-content-init  — creates FileNet object stores for BAStudio
-#   3. bastudio deployment    — Liberty server serving /bas/
-#   4. bastudio-workplace-init — configures Workplace XT
-#   5. bastudio-case-init     — initializes IBM Case Manager
+# Image: cp.icr.io/cp/cp4a/bas/workflow-authoring:25.0.1
 #
-# NOTE: ICN is restarted after bootstrap to pick up new desktop configurations.
+# How the image works (verified by introspection):
+#   - Liberty runtime managed by supervisord
+#   - ALL configuration via Liberty variable substitution (${variable}) in
+#     configDropins/defaults/*.xml; overrides go in configDropins/overrides/
+#   - Default datasource is DB2; override with PostgreSQL via datasource.xml
+#   - DB schema created by: /opt/ibm/wlp/ibmProcessServer/bin/dbConfig defaultServer -create
+#   - No bootstrap.sh / content_init.sh / etc. — those scripts do not exist
+#   - OIDC, UMS JAAS, FileNet JAAS, LTPA all handled by defaults once
+#     variables are supplied
+#   - mpHealth endpoint at /health (probe directly against pod port 9080)
+#   - Context root prefix set to /bas to match OpenShift route
+#
+# Sequence:
+#   1. bastudio-secret        — all passwords as env vars
+#   2. bastudio-liberty-config ConfigMap — four override XML files
+#   3. PVCs
+#   4. bastudio-db-init Job   — dbConfig defaultServer -create (PostgreSQL schema)
+#   5. BAStudio Deployment + Service
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 
@@ -26,20 +37,21 @@
         labels:
           app: baw-bastudio
       stringData:
-        BAS_ADMIN_USER:              "{{ ums_admin_user }}"
         BAS_ADMIN_PASSWORD:          "{{ ums_admin_password }}"
-        CPE_ADMIN_USER:              "{{ cpe_admin_user }}"
-        CPE_ADMIN_PASSWORD:          "{{ cpe_admin_password }}"
         BAS_DB_USER:                 "{{ bas_db_user }}"
         BAS_DB_PASS:                 "{{ bas_db_pass }}"
         LDAP_BIND_PASSWORD:          "{{ ldap_bind_password }}"
         KEYSTORE_PASSWORD:           "{{ keystore_password }}"
-        LTPA_PASSWORD:               "{{ ltpa_password }}"
-        UMS_INTERNAL_CLIENT_SECRET:  "{{ ums_internal_client_secret }}"
         BASTUDIO_OIDC_CLIENT_SECRET: "{{ bastudio_oidc_client_secret }}"
   no_log: true
 
-# ── Liberty server config ─────────────────────────────────────────────────────
+# ── Liberty config overrides ──────────────────────────────────────────────────
+# Four files land in configDropins/overrides/ and override the built-in defaults.
+#
+# processServer_variables.xml  — supplies every ${variable} used by default configs
+# datasource.xml               — replaces the default DB2 datasource with PostgreSQL
+# ssl.xml                      — points defaultKeyStore/TrustStore to our PKCS12 files
+# ldap-registry.xml            — WIM LDAP integration (baseDN = ldap_user_base, rdnProperty = cn)
 
 - name: Create BAStudio Liberty config ConfigMap
   kubernetes.core.k8s:
@@ -53,29 +65,130 @@
         labels:
           app: baw-bastudio
       data:
-        db-datasources.xml: |
+        processServer_variables.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
           <server>
-            <library id="PostgreSQLLib">
-              <fileset dir="/opt/ibm/wlp/usr/shared/resources/db/postgres"
-                       includes="*.jar"/>
+            <!-- ── Host / ports ───────────────────────────────── -->
+            <variable name="hostname"              value="{{ baw_hostname }}"/>
+            <variable name="http_port"             value="-1"/>
+            <variable name="https_port"            value="443"/>
+            <variable name="external_hostname"     value="{{ baw_hostname }}"/>
+            <variable name="external_https_port"   value="443"/>
+
+            <!-- ── Context root — must match the /bas OpenShift route ── -->
+            <variable name="baw_context_root_prefix" value="/bas"/>
+
+            <!-- ── Admin credentials ─────────────────────────── -->
+            <variable name="admin_user"            value="{{ ums_admin_user }}"/>
+            <variable name="admin_password"        value="${env.BAS_ADMIN_PASSWORD}"/>
+
+            <!-- ── Database ──────────────────────────────────── -->
+            <variable name="db_type"               value="PostgreSQL"/>
+            <variable name="db_name"               value="{{ bas_db_name }}"/>
+            <variable name="db_host"               value="{{ postgres_host }}"/>
+            <variable name="db_port"               value="{{ postgres_port }}"/>
+            <variable name="db_user"               value="${env.BAS_DB_USER}"/>
+            <variable name="db_password"           value="${env.BAS_DB_PASS}"/>
+            <variable name="db_check_wait_time"    value="300"/>
+            <variable name="db_check_interval_time" value="10"/>
+
+            <!-- ── OIDC client (registered as 'bastudio' in UMS) ── -->
+            <variable name="client_id"             value="bastudio"/>
+            <variable name="client_secret"         value="${env.BASTUDIO_OIDC_CLIENT_SECRET}"/>
+
+            <!-- ── UMS ───────────────────────────────────────── -->
+            <variable name="ums_hostname"          value="{{ baw_hostname }}"/>
+            <variable name="ums_port"              value="443"/>
+            <variable name="ums_admin_user"        value="{{ ums_admin_user }}"/>
+            <variable name="ums_admin_password"    value="${env.BAS_ADMIN_PASSWORD}"/>
+            <!--
+              ums_urlprefix         : used for browser-facing OIDC authorize redirect
+              ums_urlprefix_service_sso : used for server-to-server token/introspect/jwk calls
+            -->
+            <variable name="ums_urlprefix"         value="https://{{ baw_hostname }}"/>
+            <variable name="ums_urlprefix_service_sso"
+                                                   value="https://ums-svc.{{ baw_namespace }}.svc.cluster.local:9443"/>
+
+            <!-- ── SSL / LTPA ─────────────────────────────────── -->
+            <variable name="ssl_keystore_password" value="${env.KEYSTORE_PASSWORD}"/>
+
+            <!-- ── Automation service user ──────────────────── -->
+            <variable name="automation_service_user"     value="{{ ums_admin_user }}"/>
+            <variable name="automation_service_password" value="${env.BAS_ADMIN_PASSWORD}"/>
+
+            <!-- ── Delivery type ─────────────────────────────── -->
+            <variable name="delivery_type"         value="baw"/>
+
+            <!-- ── JMS (single-server: loopback) ─────────────── -->
+            <variable name="jms_server_host"       value="127.0.0.1"/>
+          </server>
+
+        datasource.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!--
+            Overrides the default DB2 datasource with PostgreSQL.
+            Same id="jdbc/TeamWorksDB" merges with — and wins over — the default.
+            The built-in PostgreSQL JDBC driver is at:
+              ${wlp.install.dir}/ibmProcessServer/lib/jdbcdrivers/PostgreSQL/postgresql.jar
+          -->
+          <server>
+            <library id="postgresqlJDBCLib">
+              <fileset dir="${wlp.install.dir}/ibmProcessServer/lib/jdbcdrivers/PostgreSQL"
+                       includes="postgresql.jar"/>
             </library>
 
-            <dataSource id="BASStudioDS" jndiName="jdbc/BAStudioDS"
+            <dataSource commitOrRollbackOnCleanup="commit"
+                        id="jdbc/TeamWorksDB"
+                        jndiName="jdbc/TeamWorksDB"
+                        isolationLevel="TRANSACTION_READ_COMMITTED"
                         type="javax.sql.XADataSource">
-              <jdbcDriver libraryRef="PostgreSQLLib"/>
+              <connectionManager maxPoolSize="50" minPoolSize="1"/>
+              <jdbcDriver javax.sql.XADataSource="org.postgresql.xa.PGXADataSource"
+                          libraryRef="postgresqlJDBCLib"/>
               <properties.postgresql
-                serverName="{{ postgres_host }}"
-                portNumber="{{ postgres_port }}"
-                databaseName="{{ bas_db_name }}"
-                user="${env.BAS_DB_USER}"
-                password="${env.BAS_DB_PASS}"/>
-              <connectionManager maxPoolSize="20" minPoolSize="1"/>
+                databaseName="${db_name}"
+                serverName="${db_host}"
+                portNumber="${db_port}"
+                user="${db_user}"
+                password="${db_password}"/>
             </dataSource>
+          </server>
+
+        ssl.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!--
+            Overrides the default ssl.xml to point Liberty at our PKCS12 files
+            mounted from the shared-ssl-config ConfigMap at /shared/tls/pkcs12/.
+            Uses ssl_keystore_password variable (supplied via processServer_variables.xml).
+          -->
+          <server>
+            <keyStore id="defaultKeyStore"
+              location="/shared/tls/pkcs12/server.p12"
+              password="${ssl_keystore_password}"
+              type="PKCS12"
+              updateTrigger="polled"
+              pollingRate="5000ms"/>
+
+            <keyStore id="defaultTrustStore"
+              location="/shared/tls/pkcs12/trusts.p12"
+              password="${ssl_keystore_password}"
+              type="PKCS12"/>
+
+            <ssl id="defaultSSLConfig"
+              keyStoreRef="defaultKeyStore"
+              trustStoreRef="defaultTrustStore"
+              sslProtocol="TLSv1.2"/>
+
+            <sslDefault sslRef="defaultSSLConfig"/>
           </server>
 
         ldap-registry.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
+          <!--
+            Federated LDAP registry for ISVD.
+            baseDN = ldap_user_base (ou=dev,dc=demodom,dc=nl) — NOT ldap_base_dn.
+            rdnProperty = cn — Liberty constructs bind DN as cn=<user>,ou=dev,...
+          -->
           <server>
             <ldapRegistry id="LDAPUserRegistry"
               realm="defaultWIMFileBasedRealm"
@@ -103,65 +216,6 @@
               <groupMemberIdMap filter="member"/>
             </ldapRegistry>
           </server>
-
-        ssl-config.xml: |
-          <?xml version="1.0" encoding="UTF-8"?>
-          <server>
-            <keyStore id="defaultKeyStore"
-              location="/shared/tls/pkcs12/server.p12"
-              password="${env.KEYSTORE_PASSWORD}"
-              type="PKCS12"/>
-            <keyStore id="defaultTrustStore"
-              location="/shared/tls/pkcs12/trusts.p12"
-              password="${env.KEYSTORE_PASSWORD}"
-              type="PKCS12"/>
-            <ssl id="defaultSSLConfig"
-              keyStoreRef="defaultKeyStore"
-              trustStoreRef="defaultTrustStore"
-              sslProtocol="TLSv1.2"/>
-            <sslDefault sslRef="defaultSSLConfig"/>
-          </server>
-
-        oidc-client.xml: |
-          <?xml version="1.0" encoding="UTF-8"?>
-          <server>
-            <openidConnectClient id="BAStudioOIDC"
-              clientId="bastudio"
-              clientSecret="${env.BASTUDIO_OIDC_CLIENT_SECRET}"
-              discoveryEndpointUrl="https://{{ baw_hostname }}/oidc/endpoint/ums/.well-known/openid-configuration"
-              scope="openid profile email"
-              redirectToRPHostAndPort="https://{{ baw_hostname }}"
-              httpsRequired="true"
-              trustAliasName="baw-server"
-              sslRef="defaultSSLConfig"/>
-          </server>
-
-# ── BAStudio bootstrap ConfigMap ──────────────────────────────────────────────
-# Contains environment config for the bootstrap Job.
-
-- name: Create BAStudio bootstrap ConfigMap
-  kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: v1
-      kind: ConfigMap
-      metadata:
-        name: bastudio-bootstrap-config
-        namespace: "{{ baw_namespace }}"
-        labels:
-          app: baw-bastudio
-      data:
-        UMS_HOST:       "https://{{ baw_hostname }}/ums"
-        CPE_HOST:       "https://{{ cpe_host }}:{{ cpe_port }}/wsi/FNCEWS40MTOM/"
-        ICN_HOST:       "https://icn-svc.{{ baw_namespace }}.svc.cluster.local:9443/navigator"
-        BAS_HOST:       "https://{{ baw_hostname }}/bas"
-        LDAP_HOST:      "{{ ldap_host }}"
-        LDAP_PORT:      "{{ ldap_port }}"
-        LDAP_BASE_DN:   "{{ ldap_base_dn }}"
-        LDAP_BIND_DN:   "{{ ldap_bind_dn }}"
-        POSTGRES_HOST:  "{{ postgres_host }}"
-        POSTGRES_PORT:  "{{ postgres_port }}"
-        BAS_DB_NAME:    "{{ bas_db_name }}"
 
 # ── Storage ───────────────────────────────────────────────────────────────────
 
@@ -201,27 +255,30 @@
             storage: 5Gi
         storageClassName: "{{ storage_class_name }}"
 
-# ── Step 1: Bootstrap Job ─────────────────────────────────────────────────────
+# ── DB init Job ───────────────────────────────────────────────────────────────
+# Runs dbConfig defaultServer -create to initialise the BAW PostgreSQL schema.
+# Only needs the DB-related overrides (processServer_variables.xml + datasource.xml)
+# and the secret env vars for db_user / db_password.
 
-- name: Delete previous bootstrap Job (if any)
+- name: Delete previous db-init Job (if any)
   kubernetes.core.k8s:
     state: absent
     definition:
       apiVersion: batch/v1
       kind: Job
       metadata:
-        name: bastudio-bootstrap
+        name: bastudio-db-init
         namespace: "{{ baw_namespace }}"
   ignore_errors: true
 
-- name: Run BAStudio bootstrap Job
+- name: Run BAStudio DB init Job (dbConfig defaultServer -create)
   kubernetes.core.k8s:
     state: present
     definition:
       apiVersion: batch/v1
       kind: Job
       metadata:
-        name: bastudio-bootstrap
+        name: bastudio-db-init
         namespace: "{{ baw_namespace }}"
         labels:
           app: baw-bastudio
@@ -239,128 +296,74 @@
               runAsUser: 1000140000
               fsGroup: 1000140000
             containers:
-              - name: bastudio-bootstrap
+              - name: bastudio-db-init
                 image: "{{ bastudio_image }}"
                 imagePullPolicy: IfNotPresent
-                command: ["/bin/sh", "-c", "/opt/ibm/scripts/bootstrap.sh"]
-                envFrom:
-                  - secretRef:
-                      name: bastudio-secret
-                  - configMapRef:
-                      name: bastudio-bootstrap-config
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    echo "Starting BAW DB initialisation..."
+                    /opt/ibm/wlp/ibmProcessServer/bin/dbConfig defaultServer -create
+                    RC=$?
+                    echo "dbConfig exit code: $RC"
+                    exit $RC
                 env:
+                  - name: BAS_ADMIN_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: bastudio-secret
+                        key: BAS_ADMIN_PASSWORD
+                  - name: BAS_DB_USER
+                    valueFrom:
+                      secretKeyRef:
+                        name: bastudio-secret
+                        key: BAS_DB_USER
+                  - name: BAS_DB_PASS
+                    valueFrom:
+                      secretKeyRef:
+                        name: bastudio-secret
+                        key: BAS_DB_PASS
+                  - name: KEYSTORE_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: bastudio-secret
+                        key: KEYSTORE_PASSWORD
+                  - name: BASTUDIO_OIDC_CLIENT_SECRET
+                    valueFrom:
+                      secretKeyRef:
+                        name: bastudio-secret
+                        key: BASTUDIO_OIDC_CLIENT_SECRET
+                  - name: LDAP_BIND_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: bastudio-secret
+                        key: LDAP_BIND_PASSWORD
                   - name: disableFIPS
                     value: "true"
                   - name: TZ
                     value: "{{ timezone }}"
                 volumeMounts:
-                  - name: tls
-                    mountPath: /shared/tls/pkcs12
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/processServer_variables.xml
+                    subPath: processServer_variables.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/datasource.xml
+                    subPath: datasource.xml
             volumes:
-              - name: tls
+              - name: liberty-config
                 configMap:
-                  name: shared-ssl-config
-                  items:
-                    - key: server.p12
-                      path: server.p12
-                    - key: trusts.p12
-                      path: trusts.p12
+                  name: bastudio-liberty-config
 
-- name: Wait for bootstrap Job to complete
+- name: Wait for DB init Job to complete
   ansible.builtin.shell: >
-    oc wait job/bastudio-bootstrap
+    oc wait job/bastudio-db-init
     -n {{ baw_namespace }}
     --for=condition=complete
     --timeout={{ bastudio_job_timeout }}s
   changed_when: false
 
-# ── Restart ICN to pick up BAStudio desktop config ────────────────────────────
-
-- name: Restart ICN after bootstrap
-  ansible.builtin.shell: >
-    oc rollout restart deployment/icn -n {{ baw_namespace }}
-  changed_when: true
-
-- name: Wait for ICN to be ready after restart
-  ansible.builtin.shell: >
-    oc rollout status deployment/icn
-    -n {{ baw_namespace }} --timeout=300s
-  changed_when: false
-
-# ── Step 2: Content-init Job ──────────────────────────────────────────────────
-
-- name: Delete previous content-init Job (if any)
-  kubernetes.core.k8s:
-    state: absent
-    definition:
-      apiVersion: batch/v1
-      kind: Job
-      metadata:
-        name: bastudio-content-init
-        namespace: "{{ baw_namespace }}"
-  ignore_errors: true
-
-- name: Run BAStudio content-init Job
-  kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: batch/v1
-      kind: Job
-      metadata:
-        name: bastudio-content-init
-        namespace: "{{ baw_namespace }}"
-        labels:
-          app: baw-bastudio
-      spec:
-        backoffLimit: 2
-        template:
-          metadata:
-            labels:
-              app: baw-bastudio-job
-          spec:
-            imagePullSecrets:
-              - name: ibm-entitlement-key
-            restartPolicy: Never
-            securityContext:
-              runAsUser: 1000140000
-              fsGroup: 1000140000
-            containers:
-              - name: bastudio-content-init
-                image: "{{ bastudio_image }}"
-                imagePullPolicy: IfNotPresent
-                command: ["/bin/sh", "-c", "/opt/ibm/scripts/content_init.sh"]
-                envFrom:
-                  - secretRef:
-                      name: bastudio-secret
-                  - configMapRef:
-                      name: bastudio-bootstrap-config
-                env:
-                  - name: disableFIPS
-                    value: "true"
-                  - name: TZ
-                    value: "{{ timezone }}"
-                volumeMounts:
-                  - name: tls
-                    mountPath: /shared/tls/pkcs12
-            volumes:
-              - name: tls
-                configMap:
-                  name: shared-ssl-config
-                  items:
-                    - key: server.p12
-                      path: server.p12
-                    - key: trusts.p12
-                      path: trusts.p12
-
-- name: Wait for content-init Job to complete
-  ansible.builtin.shell: >
-    oc wait job/bastudio-content-init
-    -n {{ baw_namespace }}
-    --for=condition=complete
-    --timeout={{ bastudio_job_timeout }}s
-  changed_when: false
-
-# ── Step 3: BAStudio Deployment ───────────────────────────────────────────────
+# ── BAStudio Deployment ───────────────────────────────────────────────────────
 
 - name: Deploy BAStudio
   kubernetes.core.k8s:
@@ -398,12 +401,37 @@
                     name: http
                   - containerPort: 9443
                     name: https
-                envFrom:
-                  - secretRef:
-                      name: bastudio-secret
-                  - configMapRef:
-                      name: bastudio-bootstrap-config
                 env:
+                  - name: BAS_ADMIN_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: bastudio-secret
+                        key: BAS_ADMIN_PASSWORD
+                  - name: BAS_DB_USER
+                    valueFrom:
+                      secretKeyRef:
+                        name: bastudio-secret
+                        key: BAS_DB_USER
+                  - name: BAS_DB_PASS
+                    valueFrom:
+                      secretKeyRef:
+                        name: bastudio-secret
+                        key: BAS_DB_PASS
+                  - name: LDAP_BIND_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: bastudio-secret
+                        key: LDAP_BIND_PASSWORD
+                  - name: KEYSTORE_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: bastudio-secret
+                        key: KEYSTORE_PASSWORD
+                  - name: BASTUDIO_OIDC_CLIENT_SECRET
+                    valueFrom:
+                      secretKeyRef:
+                        name: bastudio-secret
+                        key: BASTUDIO_OIDC_CLIENT_SECRET
                   - name: disableFIPS
                     value: "true"
                   - name: TZ
@@ -419,29 +447,32 @@
                   limits:
                     memory: 4Gi
                     cpu: "2"
+                # mpHealth-1.0 serves at /health directly on the pod (not via route).
+                # Kubernetes probes bypass the OpenShift router, so the /bas route
+                # prefix does NOT apply here.
                 livenessProbe:
                   httpGet:
-                    path: /bas/health
+                    path: /health
                     port: 9080
                     scheme: HTTP
-                  initialDelaySeconds: 120
+                  initialDelaySeconds: 180
                   periodSeconds: 30
                   failureThreshold: 10
                 readinessProbe:
                   httpGet:
-                    path: /bas/health
+                    path: /health
                     port: 9080
                     scheme: HTTP
-                  initialDelaySeconds: 90
+                  initialDelaySeconds: 120
                   periodSeconds: 15
                   failureThreshold: 20
                 startupProbe:
                   httpGet:
-                    path: /bas/health
+                    path: /health
                     port: 9080
                     scheme: HTTP
                   periodSeconds: 15
-                  failureThreshold: 60
+                  failureThreshold: 80
                 volumeMounts:
                   - name: data
                     mountPath: /opt/ibm/bas/data
@@ -450,17 +481,17 @@
                   - name: overrides-dir
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides
                   - name: liberty-config
-                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/db-datasources.xml
-                    subPath: db-datasources.xml
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/processServer_variables.xml
+                    subPath: processServer_variables.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/datasource.xml
+                    subPath: datasource.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ssl.xml
+                    subPath: ssl.xml
                   - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ldap-registry.xml
                     subPath: ldap-registry.xml
-                  - name: liberty-config
-                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ssl-config.xml
-                    subPath: ssl-config.xml
-                  - name: liberty-config
-                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/oidc-client.xml
-                    subPath: oidc-client.xml
                   - name: tls
                     mountPath: /shared/tls/pkcs12
             volumes:
@@ -506,161 +537,18 @@
             targetPort: 9443
             name: https
 
-- name: Wait for BAStudio deployment
+- name: Wait for BAStudio deployment to be ready
   ansible.builtin.shell: >
     oc rollout status deployment/bastudio
     -n {{ baw_namespace }} --timeout={{ pod_ready_timeout }}s
   changed_when: false
 
-# ── Step 4: Workplace-init Job ────────────────────────────────────────────────
-
-- name: Delete previous workplace-init Job (if any)
-  kubernetes.core.k8s:
-    state: absent
-    definition:
-      apiVersion: batch/v1
-      kind: Job
-      metadata:
-        name: bastudio-workplace-init
-        namespace: "{{ baw_namespace }}"
-  ignore_errors: true
-
-- name: Run BAStudio workplace-init Job
-  kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: batch/v1
-      kind: Job
-      metadata:
-        name: bastudio-workplace-init
-        namespace: "{{ baw_namespace }}"
-        labels:
-          app: baw-bastudio
-      spec:
-        backoffLimit: 2
-        template:
-          metadata:
-            labels:
-              app: baw-bastudio-job
-          spec:
-            imagePullSecrets:
-              - name: ibm-entitlement-key
-            restartPolicy: Never
-            securityContext:
-              runAsUser: 1000140000
-              fsGroup: 1000140000
-            containers:
-              - name: bastudio-workplace-init
-                image: "{{ bastudio_image }}"
-                imagePullPolicy: IfNotPresent
-                command: ["/bin/sh", "-c", "/opt/ibm/scripts/workplace_init.sh"]
-                envFrom:
-                  - secretRef:
-                      name: bastudio-secret
-                  - configMapRef:
-                      name: bastudio-bootstrap-config
-                env:
-                  - name: disableFIPS
-                    value: "true"
-                  - name: TZ
-                    value: "{{ timezone }}"
-                volumeMounts:
-                  - name: tls
-                    mountPath: /shared/tls/pkcs12
-            volumes:
-              - name: tls
-                configMap:
-                  name: shared-ssl-config
-                  items:
-                    - key: server.p12
-                      path: server.p12
-                    - key: trusts.p12
-                      path: trusts.p12
-
-- name: Wait for workplace-init Job to complete
-  ansible.builtin.shell: >
-    oc wait job/bastudio-workplace-init
-    -n {{ baw_namespace }}
-    --for=condition=complete
-    --timeout={{ bastudio_job_timeout }}s
-  changed_when: false
-
-# ── Step 5: Case-init Job ─────────────────────────────────────────────────────
-
-- name: Delete previous case-init Job (if any)
-  kubernetes.core.k8s:
-    state: absent
-    definition:
-      apiVersion: batch/v1
-      kind: Job
-      metadata:
-        name: bastudio-case-init
-        namespace: "{{ baw_namespace }}"
-  ignore_errors: true
-
-- name: Run BAStudio case-init Job
-  kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: batch/v1
-      kind: Job
-      metadata:
-        name: bastudio-case-init
-        namespace: "{{ baw_namespace }}"
-        labels:
-          app: baw-bastudio
-      spec:
-        backoffLimit: 2
-        template:
-          metadata:
-            labels:
-              app: baw-bastudio-job
-          spec:
-            imagePullSecrets:
-              - name: ibm-entitlement-key
-            restartPolicy: Never
-            securityContext:
-              runAsUser: 1000140000
-              fsGroup: 1000140000
-            containers:
-              - name: bastudio-case-init
-                image: "{{ bastudio_image }}"
-                imagePullPolicy: IfNotPresent
-                command: ["/bin/sh", "-c", "/opt/ibm/scripts/case_init.sh"]
-                envFrom:
-                  - secretRef:
-                      name: bastudio-secret
-                  - configMapRef:
-                      name: bastudio-bootstrap-config
-                env:
-                  - name: disableFIPS
-                    value: "true"
-                  - name: TZ
-                    value: "{{ timezone }}"
-                volumeMounts:
-                  - name: tls
-                    mountPath: /shared/tls/pkcs12
-            volumes:
-              - name: tls
-                configMap:
-                  name: shared-ssl-config
-                  items:
-                    - key: server.p12
-                      path: server.p12
-                    - key: trusts.p12
-                      path: trusts.p12
-
-- name: Wait for case-init Job to complete
-  ansible.builtin.shell: >
-    oc wait job/bastudio-case-init
-    -n {{ baw_namespace }}
-    --for=condition=complete
-    --timeout={{ bastudio_job_timeout }}s
-  changed_when: false
-
 - name: BAStudio summary
   ansible.builtin.debug:
     msg:
-      - "BAStudio ready at https://{{ baw_hostname }}/bas/"
-      - "Case Manager : https://{{ baw_hostname }}/bas/CaseManager"
-      - "Admin user   : {{ ums_admin_user }}"
+      - "BAStudio ready"
+      - "  BAStudio   : https://{{ baw_hostname }}/bas/BAStudio"
+      - "  WorkflowCtr: https://{{ baw_hostname }}/bas/WorkflowCenter"
+      - "  ProcessAdmin: https://{{ baw_hostname }}/bas/ProcessAdmin"
+      - "  REST APIs  : https://{{ baw_hostname }}/bas/bpm/..."
+      - "  Admin user : {{ ums_admin_user }}"
