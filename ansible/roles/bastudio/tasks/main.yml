@@ -746,7 +746,30 @@
 
                     OVERRIDES=/opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides
                     DEFAULTS=/opt/ibm/wlp/usr/servers/defaultServer/configDropins/defaults
+                    SYS=/opt/ibm/wlp/usr/servers/defaultServer/config/system
+                    SYSMT=/opt/ibm/wlp/usr/servers/defaultServer/config/system_multiTenant
                     DRIVER_DIR=/opt/ibm/wlp/ibmProcessServer/lib/jdbcdrivers/PostgreSQL
+
+                    # ── Step 0: activate PostgreSQL 60Database.xml (CRITICAL for bootstrap) ──
+                    # 60Database.xml holds the database-dialect SQL templates, including the
+                    # <lock-acquire> query used by DBLockHelper to grab IMPORT_LOCK_TWX_KEY
+                    # during the system-toolkit import in bootstrapProcessServer.
+                    # The image default is the DB2 variant: "...FOR UPDATE WITH RS", which
+                    # PostgreSQL rejects (syntax error at/near "WITH") — so the toolkit import
+                    # fails, leaving system toolkit projects with NO snapshot content. The UI
+                    # then fails to create a workflow with "Snapshot ... not found" / CWTBG0737E.
+                    # The image's database.sh does this copy at pod startup (for the live
+                    # server), but the DB-init Job never runs database.sh, so we must do it
+                    # here too. The PostgreSQL variant uses plain "FOR UPDATE" (no WITH RS).
+                    echo "==> Step 0: activate PostgreSQL 60Database.xml..."
+                    cp "${SYS}/60Database.xml.PostgreSQL" "${SYS}/60Database.xml"
+                    if [ -f "${SYSMT}/60Database.xml.PostgreSQL" ]; then
+                        cp "${SYSMT}/60Database.xml.PostgreSQL" "${SYSMT}/60Database.xml"
+                    fi
+                    if grep -q "FOR UPDATE WITH RS" "${SYS}/60Database.xml"; then
+                        echo "    ERROR: 60Database.xml still contains DB2 'FOR UPDATE WITH RS'"; exit 1
+                    fi
+                    echo "    60Database.xml.PostgreSQL activated (lock SQL = plain FOR UPDATE)"
 
                     # ── Step 1: activate PostgreSQL datasource in configDropins/defaults/ ──
                     echo "==> Step 1: activate PostgreSQL datasource in defaults/..."
@@ -812,52 +835,31 @@
                     [ $RC -ne 0 ] && exit $RC
 
                     # ── Step 5: run bootstrapProcessServer ──
-                    # Loads initial system data: admin user into lsw_usr/lsw_usr_xref,
-                    # group memberships, user attribute definitions, system toolkit import.
-                    # NOTE: The system-toolkit.twx import WILL fail with:
-                    #   "FOR UPDATE WITH RS" (DB2 lock syntax used even on PostgreSQL)
-                    # This is a known IBM BAW 25.0.1 bug on PostgreSQL. The failure is
-                    # non-fatal for basic login; the admin user records (lsw_usr_xref,
-                    # lsw_usr_grp_mem_xref) are committed before the toolkit import attempt.
-                    # We accept the partial bootstrap and fix up remaining data in step 6.
-                    echo "==> Step 5: bootstrapProcessServer defaultServer (toolkit import may fail)..."
-                    set +e
+                    # Loads initial system data into the schema: admin user (lsw_usr_xref +
+                    # group memberships), user attribute definitions (lsw_user_attribute_def),
+                    # and — critically — imports ALL system toolkits (System Data, Content
+                    # Management, Dashboards, Responsive Coaches, BPM UI) plus the Workstreams
+                    # app, creating their projects/branches/snapshots. The BAStudio UI clones
+                    # these when you create a workflow automation; without them, creation fails
+                    # with "Snapshot ... not found" / CWTBG0737E.
+                    #
+                    # This now SUCCEEDS because Step 0 activated the PostgreSQL 60Database.xml
+                    # (lock SQL = plain "FOR UPDATE"). With the image-default DB2 variant the
+                    # toolkit import dies on "FOR UPDATE WITH RS".
+                    #
+                    # ADMIN_USER is set in env so bootstrap writes the real admin name into
+                    # lsw_usr_xref (otherwise it inserts the literal "${env.ADMIN_USER}").
+                    echo "==> Step 5: bootstrapProcessServer defaultServer (imports system toolkits)..."
                     /opt/ibm/wlp/ibmProcessServer/bin/bootstrapProcessServer defaultServer
-                    BOOTSTRAP_RC=$?
-                    set -e
-                    echo "bootstrapProcessServer exit: ${BOOTSTRAP_RC} (non-zero OK - toolkit import fails on PostgreSQL)"
+                    echo "    bootstrapProcessServer completed (exit $?)"
 
-                    # ── Step 5b: fix admin user records ──
-                    # bootstrapProcessServer inserts lsw_usr_xref using ${env.ADMIN_USER},
-                    # which is not set, so the literal placeholder lands in user_name. It also
-                    # does NOT populate lsw_usr (that happens during the toolkit import, which
-                    # fails on PostgreSQL due to the FOR UPDATE WITH RS DB2 lock syntax).
-                    # Fix both with inline -c statements (no heredoc, to keep YAML block-scalar safe).
-                    echo "==> Step 5b: fix admin user records..."
-                    PGPASSWORD="${BAS_DB_PASS}" psql \
-                      -h "${BAS_DB_HOST}" -p "${BAS_DB_PORT}" \
-                      -U "${BAS_DB_USER}" -d "${BAS_DB_NAME}" \
-                      -c "UPDATE ${BAS_DB_USER}.lsw_usr_xref SET user_name = '{{ ums_admin_user }}', full_name = '{{ ums_admin_user }}' WHERE user_name LIKE '\$\{env.%' AND user_id = 1;" \
-                      -c "INSERT INTO ${BAS_DB_USER}.lsw_usr (user_id, user_name, passwd, full_name, is_disabled) VALUES (1, '{{ ums_admin_user }}', 'n/a', '{{ ums_admin_user }}', 'F') ON CONFLICT (user_id) DO UPDATE SET user_name = '{{ ums_admin_user }}', full_name = '{{ ums_admin_user }}';"
-                    echo "    Admin user records fixed"
-
-                    # ── Step 7: set IsRepository=true in lsw_system ──
-                    # dbConfig init creates the BAW schema but does NOT insert the
-                    # IsRepository flag into lsw_system. ServerTypeUtil.isRepository()
-                    # reads lsw_system.propkey='IsRepository'; if missing, parseBoolean(null)
-                    # returns false → BAStudio reports "database is Workflow Runtime" and
-                    # the UI shows "/bas/BAStudio is not valid for this server type".
-                    # Insert the flag explicitly so the server starts in Workflow Authoring mode.
-                    echo "==> Step 5: set IsRepository=true in lsw_system..."
-                    PGPASSWORD="${BAS_DB_PASS}" psql \
-                      -h "${BAS_DB_HOST}" -p "${BAS_DB_PORT}" \
-                      -U "${BAS_DB_USER}" -d "${BAS_DB_NAME}" \
-                      -c "INSERT INTO ${BAS_DB_USER}.lsw_system (propkey, propvalue)
-                              VALUES ('IsRepository', 'true')
-                          ON CONFLICT (propkey) DO UPDATE SET propvalue = 'true';"
-                    echo "    IsRepository flag set"
+                    # NOTE: Remaining DB fixups (lsw_usr profile row + IsRepository flag) run as
+                    # a SEPARATE Ansible task against the PostgreSQL pod — the workflow-authoring
+                    # image does NOT ship the psql client, so they cannot run here.
                     exit 0
                 env:
+                  - name: ADMIN_USER
+                    value: "{{ ums_admin_user }}"
                   - name: BAS_ADMIN_PASSWORD
                     valueFrom:
                       secretKeyRef:
@@ -926,6 +928,39 @@
     --for=condition=complete
     --timeout={{ bastudio_job_timeout }}s
   changed_when: false
+
+# ── Post-bootstrap DB fixups ──────────────────────────────────────────────────
+# Run the two remaining SQL fixups that the db-init Job cannot do itself (the
+# workflow-authoring image ships no psql client). These run via the PostgreSQL
+# pod, which has psql:
+#   1. lsw_usr profile row for the admin user. bootstrapProcessServer populates
+#      lsw_usr_xref but not lsw_usr; the post-login getOrCreateUserInfoObject path
+#      expects a matching lsw_usr row.
+#   2. IsRepository=true in lsw_system. Without it ServerTypeUtil.isRepository()
+#      reads null -> false -> "database is Workflow Runtime" -> the UI shows
+#      "/bas/BAStudio is not valid for this server type".
+
+- name: Find PostgreSQL pod (has psql client)
+  ansible.builtin.shell: >
+    oc get pod -n {{ postgres_namespace | default('infra') }}
+    -l {{ postgres_pod_selector | default('app=postgresql') }}
+    -o jsonpath='{.items[0].metadata.name}'
+  register: _pg_pod
+  changed_when: false
+
+- name: Apply post-bootstrap BAStudio DB fixups (admin lsw_usr row + IsRepository flag)
+  ansible.builtin.shell: >
+    oc exec -n {{ postgres_namespace | default('infra') }} {{ _pg_pod.stdout }} --
+    env PGPASSWORD='{{ bas_db_pass }}'
+    psql -U {{ bas_db_user }} -d {{ bas_db_name }}
+    -c "INSERT INTO {{ bas_db_user }}.lsw_usr (user_id,user_name,passwd,full_name,is_disabled)
+        VALUES (1,'{{ ums_admin_user }}','n/a','{{ ums_admin_user }}','F')
+        ON CONFLICT (user_id) DO UPDATE SET user_name='{{ ums_admin_user }}', full_name='{{ ums_admin_user }}';"
+    -c "INSERT INTO {{ bas_db_user }}.lsw_system (propkey,propvalue) VALUES ('IsRepository','true')
+        ON CONFLICT (propkey) DO UPDATE SET propvalue='true';"
+  register: _bas_db_fixups
+  changed_when: true
+  no_log: true
 
 # ── BAStudio Deployment ───────────────────────────────────────────────────────
 
