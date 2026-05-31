@@ -900,6 +900,15 @@
                     value: "true"
                   - name: CAPABILITIES
                     value: "workflow,content-integration"
+                  # BAW_CONTEXT_ROOT_PREFIX is read by BPMContextRootConfigService to build
+                  # the endpoint URLs injected into index.jsp at login time. Without it the
+                  # service returns paths without the /bas prefix (e.g. /rest/bpm/wle instead
+                  # of /bas/rest/bpm/wle). The browser JS then calls the wrong OCP route paths
+                  # which have no route → 404 → "The current user didn't load properly."
+                  # Note: baw_context_root_prefix (Liberty variable) controls Liberty context
+                  # root deployment; BAW_CONTEXT_ROOT_PREFIX (env var) controls URL generation.
+                  - name: BAW_CONTEXT_ROOT_PREFIX
+                    value: "/bas"
                 resources:
                   requests:
                     memory: 2Gi
