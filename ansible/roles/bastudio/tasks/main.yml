@@ -256,6 +256,115 @@
               httpsPort="9443"/>
           </server>
 
+        ums-jaaslogin.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!--
+            UMS JAAS login module — required for post-OIDC user authentication.
+            Sets up auth aliases referenced by scim.xml, ums-auth-options, and the
+            UMSLoginModule that enriches the Subject after the OIDC token exchange.
+            Without this file Liberty has no UMS JAAS context and "The current user
+            didn't load properly" is shown after login.
+          -->
+          <server>
+            <authData id="UMSTeams-auth-alias"    user="${ums_admin_user}" password="${ums_admin_password}"/>
+            <authData id="UMSAuth-client-alias"   user="${client_id}"      password="${client_secret}"/>
+            <authData id="SCIM-client-auth-alias" user="${ums_admin_user}" password="${ums_admin_password}"/>
+
+            <library id="umsJaasLoginLib">
+              <fileset dir="${wlp.install.dir}/ibmProcessServer/lib/BPM/Lombardi/lib"
+                       includes="com.ibm.dba.ums.jaaslogin.jar"/>
+            </library>
+
+            <jaasLoginModule
+              id="umsJaasLogin"
+              className="com.ibm.dba.ums.security.authentication.jaas.modules.UMSLoginModule"
+              controlFlag="REQUIRED"
+              libraryRef="umsJaasLoginLib">
+              <options
+                umsEndpointBaseUrl="https://ums-svc.{{ baw_namespace }}.svc.cluster.local:9443/oidc/endpoint/ums"
+                userinfo="false"
+                clientId="${client_id}"
+                clientSecret="${client_secret}"
+                disableCnCheck="true"/>
+            </jaasLoginModule>
+
+            <jaasLoginContextEntry
+              id="umsJaasContext"
+              name="umsJaasContext"
+              loginModuleRef="umsJaasLogin, hashtable"/>
+          </server>
+
+        111Custom.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!--
+            BAW TeamWorks configuration overlay.
+            Enables required server components, configures SCIM options pointing to
+            the internal UMS service, and sets ums-auth-options so BAStudio knows
+            where to authenticate users after OIDC login.
+            Disabling UMS Teams (empty URL) prevents CWLLG2330E timeout errors.
+          -->
+          <properties>
+            <server>
+              <components merge="mergeChildren">
+                <component name="RapidWorkflow"      enabled="true" merge="replace"/>
+                <component name="Workplace"          enabled="true" merge="replace"/>
+                <component name="BAWContainerServer" enabled="true" merge="replace"/>
+              </components>
+
+              <search-index merge="mergeChildren">
+                <task-index-enabled      merge="replace">false</task-index-enabled>
+                <federated-index-enabled merge="replace">false</federated-index-enabled>
+                <fdr-index-enabled       merge="replace">false</fdr-index-enabled>
+              </search-index>
+
+              <exposed-project-types merge="replace">
+                <project-type>general</project-type>
+                <project-type>processapp</project-type>
+                <project-type>casesolution</project-type>
+              </exposed-project-types>
+
+              <server-name        merge="replace">workflow authoring</server-name>
+              <server-description merge="replace">BAW Workflow Authoring</server-description>
+            </server>
+
+            <common>
+              <security>
+                <scim-options merge="replace">
+                  <scim-user-auth-alias-name>SCIM-client-auth-alias</scim-user-auth-alias-name>
+                  <scim-server-host-name>ums-svc.{{ baw_namespace }}.svc.cluster.local</scim-server-host-name>
+                  <scim-server-port>9443</scim-server-port>
+                  <disable-cn-check>true</disable-cn-check>
+                  <scim-client-ssl-config></scim-client-ssl-config>
+                  <user-search-attribute>principalName</user-search-attribute>
+                  <user-name-identifier>userName</user-name-identifier>
+                  <user-uniquename-identifier>id</user-uniquename-identifier>
+                  <user-displayname-query-attr>displayName</user-displayname-query-attr>
+                  <user-displayname-result-attr>displayName</user-displayname-result-attr>
+                  <group-search-attribute>principalName</group-search-attribute>
+                  <group-name-identifier>name</group-name-identifier>
+                  <group-uniquename-identifier>id</group-uniquename-identifier>
+                  <group-displayname-result-attr>displayName</group-displayname-result-attr>
+                  <group-displayname-query-attr>displayName</group-displayname-query-attr>
+                </scim-options>
+
+                <ums-auth-options>
+                  <ums-auth-endpoint-url merge="replace">https://ums-svc.{{ baw_namespace }}.svc.cluster.local:9443/oidc/endpoint/ums</ums-auth-endpoint-url>
+                  <ums-auth-client-alias-name merge="replace">UMSAuth-client-alias</ums-auth-client-alias-name>
+                  <ums-auth-ssl-config></ums-auth-ssl-config>
+                  <ums-auth-connection-timeout    merge="replace">360000</ums-auth-connection-timeout>
+                  <ums-auth-receive-timeout       merge="replace">360000</ums-auth-receive-timeout>
+                  <ums-auth-connection-pool-size  merge="replace">20</ums-auth-connection-pool-size>
+                  <disable-cn-check>true</disable-cn-check>
+                </ums-auth-options>
+
+                <ums-teams-options>
+                  <!-- UMS Teams not deployed; empty URL disables teams integration (prevents CWLLG2330E) -->
+                  <ums-teams-endpoint-url merge="replace"></ums-teams-endpoint-url>
+                </ums-teams-options>
+              </security>
+            </common>
+          </properties>
+
         oidc-issuer-override.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
           <!--
@@ -783,6 +892,14 @@
                     value: "1024m"
                   - name: JVM_HEAP_XMX
                     value: "2048m"
+                  - name: CPE_URL
+                    value: "https://cpe-svc.{{ baw_namespace }}.svc.cluster.local:9443/wsi/FNCEWS40MTOM"
+                  - name: GRAPHQL_ENDPOINT
+                    value: "https://graphql-svc.{{ baw_namespace }}.svc.cluster.local:9443/content-services-graphql/graphql"
+                  - name: is_internal_baw
+                    value: "true"
+                  - name: CAPABILITIES
+                    value: "workflow,content-integration"
                 resources:
                   requests:
                     memory: 2Gi
@@ -841,6 +958,12 @@
                   - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/logout-domain-override.xml
                     subPath: logout-domain-override.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ums-jaaslogin.xml
+                    subPath: ums-jaaslogin.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/config/111Custom.xml
+                    subPath: 111Custom.xml
                   - name: tls
                     mountPath: /shared/tls/pkcs12
                   - name: startup-scripts
