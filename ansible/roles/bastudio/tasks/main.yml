@@ -337,7 +337,18 @@
                   <scim-client-ssl-config></scim-client-ssl-config>
                   <user-search-attribute>principalName</user-search-attribute>
                   <user-name-identifier>userName</user-name-identifier>
-                  <user-uniquename-identifier>id</user-uniquename-identifier>
+                  <!--
+                    user-uniquename-identifier = userName (NOT id):
+                    SCIM returns id = full LDAP DN (cn=bawadmin,ou=dev,...).
+                    If set to "id", BAW uses the DN as the DB key; bootstrapProcessServer
+                    creates the admin user with user_name="bawadmin" (the short name),
+                    so the lookup fails → getOrCreate allocates a new user_id → tries
+                    to find it in lsw_usr (which bootstrapProcessServer didn't fully
+                    populate due to the FOR UPDATE WITH RS PostgreSQL incompatibility)
+                    → CWTBG0737E. Using "userName" makes BAW match the "bawadmin" key
+                    that exists in lsw_usr_xref from the bootstrap.
+                  -->
+                  <user-uniquename-identifier>userName</user-uniquename-identifier>
                   <user-displayname-query-attr>displayName</user-displayname-query-attr>
                   <user-displayname-result-attr>displayName</user-displayname-result-attr>
                   <group-search-attribute>principalName</group-search-attribute>
@@ -396,6 +407,83 @@
           -->
           <server>
             <webAppSecurity logoutPageRedirectDomainNames="{{ baw_hostname }}" />
+          </server>
+
+        jms-server.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!--
+            Embedded SIB messaging engine (wasJmsServer). REQUIRED for project/workflow
+            creation: createNewProject -> ProjectDAO.postSave -> sendEvent publishes to
+            the JMS bus. The image only ships the JMS *client* (jms-client.xml), which
+            connects to ${jms_server_host}:${jms_server_ssl_port} (127.0.0.1:9127). With
+            no server listening there, every send fails with CWSIT0127E and project
+            creation aborts with CWTBG0737E ("Your request couldn't be processed").
+
+            Two auth concerns handled here:
+              1. Connection authentication (JMSAuthAlias -> jms_user/jms_password):
+                 jms_user is overridden to a DEDICATED "jmsserver" account that exists
+                 ONLY in this basicRegistry. Reusing the LDAP-backed admin_user (bawadmin)
+                 caused a federation conflict -> CWWKM3009E "user bawadmin is not
+                 authenticated to access Liberty messaging".
+              2. Authorization (messagingSecurity role workflowPS): granted to BOTH
+                 jms_user (connection identity) AND admin_user (the logged-in subject
+                 under which server-internal cache publishes run). Without the admin_user
+                 grant, SEND on cacheTopic fails with CWWKM3010W / CWSIA0069E. Role grant
+                 is authorization-only, so naming bawadmin here creates no auth conflict.
+          -->
+          <server>
+            <featureManager>
+              <feature>wasJmsServer-1.0</feature>
+              <feature>wasJmsSecurity-1.0</feature>
+            </featureManager>
+
+            <!-- Dedicated JMS user (basicRegistry only, NOT in LDAP) -->
+            <variable name="jms_user" value="jmsserver" />
+            <basicRegistry realm="defaultWIMFileBasedRealm" id="basicRegistry" ignoreCaseForAuthentication="true">
+              <user name="${jms_user}" password="${jms_password}" />
+            </basicRegistry>
+
+            <wasJmsEndpoint id="InboundJmsCommsEndpoint" host="*"
+              wasJmsPort="-1"
+              wasJmsSSLPort="${jms_server_ssl_port}">
+              <sslOptions sslRef="defaultSSLConfig" />
+              <tcpOptions soReuseAddr="true" />
+            </wasJmsEndpoint>
+
+            <messagingEngine>
+              <queue id="CHEventDestination" forceReliability="ReliablePersistent" maxMessageDepth="50000"></queue>
+              <queue id="DefEventDestination" forceReliability="ReliablePersistent" maxMessageDepth="50000"></queue>
+              <queue id="eventQueueDestination" forceReliability="ReliablePersistent" maxMessageDepth="50000"></queue>
+              <queue id="eventErrorQueueDestination" forceReliability="ReliablePersistent" maxMessageDepth="50000"></queue>
+              <queue id="BPDDocMigServiceDeployQueueDestination" forceReliability="ReliablePersistent" maxMessageDepth="50000"></queue>
+              <topicSpace id="PortalWebMessagingTopicSpace" forceReliability="ReliablePersistent" maintainStrictOrder="false" maxMessageDepth="50000"></topicSpace>
+              <topicSpace id="TaskChangeTopicSpace" forceReliability="ReliablePersistent" maintainStrictOrder="true" maxMessageDepth="50000"></topicSpace>
+              <topicSpace id="EventMgrControlTopicSpace" forceReliability="ReliablePersistent" maintainStrictOrder="true" maxMessageDepth="50000"></topicSpace>
+              <topicSpace id="TWClientTopicSpace" forceReliability="ReliablePersistent" maintainStrictOrder="true" maxMessageDepth="50000"></topicSpace>
+              <topicSpace id="TWServerTopicSpace" forceReliability="ReliablePersistent" maintainStrictOrder="true" maxMessageDepth="50000"></topicSpace>
+              <topicSpace id="cacheTopicSpace" forceReliability="ReliablePersistent" maintainStrictOrder="true" maxMessageDepth="50000"></topicSpace>
+              <topicSpace id="HealthCheckTopicSpace" forceReliability="ReliablePersistent" maintainStrictOrder="true" maxMessageDepth="50000"></topicSpace>
+              <topicSpace id="caseTopicSpace" forceReliability="ReliablePersistent" maintainStrictOrder="true" maxMessageDepth="50000"></topicSpace>
+              <messagingSecurity>
+                <role name="workflowPS">
+                  <queuePermission queueRef="DefEventDestination"><action>ALL</action></queuePermission>
+                  <queuePermission queueRef="CHEventDestination"><action>ALL</action></queuePermission>
+                  <queuePermission queueRef="eventQueueDestination"><action>ALL</action></queuePermission>
+                  <queuePermission queueRef="eventErrorQueueDestination"><action>ALL</action></queuePermission>
+                  <queuePermission queueRef="BPDDocMigServiceDeployQueueDestination"><action>ALL</action></queuePermission>
+                  <topicPermission topicSpaceRef="PortalWebMessagingTopicSpace"><action>ALL</action></topicPermission>
+                  <topicPermission topicSpaceRef="TaskChangeTopicSpace"><action>ALL</action></topicPermission>
+                  <topicPermission topicSpaceRef="EventMgrControlTopicSpace"><action>ALL</action></topicPermission>
+                  <topicPermission topicSpaceRef="TWClientTopicSpace"><action>ALL</action></topicPermission>
+                  <topicPermission topicSpaceRef="TWServerTopicSpace"><action>ALL</action></topicPermission>
+                  <topicPermission topicSpaceRef="cacheTopicSpace"><action>ALL</action></topicPermission>
+                  <topicPermission topicSpaceRef="HealthCheckTopicSpace"><action>ALL</action></topicPermission>
+                  <topicPermission topicSpaceRef="caseTopicSpace"><action>ALL</action></topicPermission>
+                  <user name="${jms_user}" />
+                  <user name="${admin_user}" />
+                </role>
+              </messagingSecurity>
+            </messagingEngine>
           </server>
 
         ldap-registry.xml: |
@@ -723,7 +811,37 @@
                     echo "dbConfig exit code: $RC"
                     [ $RC -ne 0 ] && exit $RC
 
-                    # ── Step 5: set IsRepository=true in lsw_system ──
+                    # ── Step 5: run bootstrapProcessServer ──
+                    # Loads initial system data: admin user into lsw_usr/lsw_usr_xref,
+                    # group memberships, user attribute definitions, system toolkit import.
+                    # NOTE: The system-toolkit.twx import WILL fail with:
+                    #   "FOR UPDATE WITH RS" (DB2 lock syntax used even on PostgreSQL)
+                    # This is a known IBM BAW 25.0.1 bug on PostgreSQL. The failure is
+                    # non-fatal for basic login; the admin user records (lsw_usr_xref,
+                    # lsw_usr_grp_mem_xref) are committed before the toolkit import attempt.
+                    # We accept the partial bootstrap and fix up remaining data in step 6.
+                    echo "==> Step 5: bootstrapProcessServer defaultServer (toolkit import may fail)..."
+                    set +e
+                    /opt/ibm/wlp/ibmProcessServer/bin/bootstrapProcessServer defaultServer
+                    BOOTSTRAP_RC=$?
+                    set -e
+                    echo "bootstrapProcessServer exit: ${BOOTSTRAP_RC} (non-zero OK - toolkit import fails on PostgreSQL)"
+
+                    # ── Step 5b: fix admin user records ──
+                    # bootstrapProcessServer inserts lsw_usr_xref using ${env.ADMIN_USER},
+                    # which is not set, so the literal placeholder lands in user_name. It also
+                    # does NOT populate lsw_usr (that happens during the toolkit import, which
+                    # fails on PostgreSQL due to the FOR UPDATE WITH RS DB2 lock syntax).
+                    # Fix both with inline -c statements (no heredoc, to keep YAML block-scalar safe).
+                    echo "==> Step 5b: fix admin user records..."
+                    PGPASSWORD="${BAS_DB_PASS}" psql \
+                      -h "${BAS_DB_HOST}" -p "${BAS_DB_PORT}" \
+                      -U "${BAS_DB_USER}" -d "${BAS_DB_NAME}" \
+                      -c "UPDATE ${BAS_DB_USER}.lsw_usr_xref SET user_name = '{{ ums_admin_user }}', full_name = '{{ ums_admin_user }}' WHERE user_name LIKE '\$\{env.%' AND user_id = 1;" \
+                      -c "INSERT INTO ${BAS_DB_USER}.lsw_usr (user_id, user_name, passwd, full_name, is_disabled) VALUES (1, '{{ ums_admin_user }}', 'n/a', '{{ ums_admin_user }}', 'F') ON CONFLICT (user_id) DO UPDATE SET user_name = '{{ ums_admin_user }}', full_name = '{{ ums_admin_user }}';"
+                    echo "    Admin user records fixed"
+
+                    # ── Step 7: set IsRepository=true in lsw_system ──
                     # dbConfig init creates the BAW schema but does NOT insert the
                     # IsRepository flag into lsw_system. ServerTypeUtil.isRepository()
                     # reads lsw_system.propkey='IsRepository'; if missing, parseBoolean(null)
@@ -973,6 +1091,9 @@
                   - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/config/111Custom.xml
                     subPath: 111Custom.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/jms-server.xml
+                    subPath: jms-server.xml
                   - name: tls
                     mountPath: /shared/tls/pkcs12
                   - name: startup-scripts
