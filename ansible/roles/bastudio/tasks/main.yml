@@ -143,6 +143,17 @@
             <!-- ── Delivery type ─────────────────────────────── -->
             <variable name="delivery_type"         value="baw"/>
 
+            <!-- ── Liberty server type — MUST be "BA Studio" ─── -->
+            <!--
+              processServer_variables_system.xml (image default, in overrides/) sets:
+                libertyServerType = "BAW Designer"
+              EnvironmentUtils.isLibertyBAStudio() checks: "BA Studio".equals(libertyServerType)
+              With the default value the check returns false and the BAStudio UI shows:
+                "/bas/BAStudio is not valid for this server type"
+              Override with the correct value for the authoring (BAStudio) server type.
+            -->
+            <variable name="libertyServerType"     value="BA Studio"/>
+
             <!-- ── JMS (single-server: loopback) ─────────────── -->
             <variable name="jms_server_host"       value="127.0.0.1"/>
           </server>
