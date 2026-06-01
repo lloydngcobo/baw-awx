@@ -499,7 +499,8 @@
       "introspect_tokens": true
     }' 2>&1
   register: _bastudio_client_reg
-  changed_when: true
+  changed_when: _bastudio_client_reg.rc == 0
+  ignore_errors: true
   no_log: true
   when: _bastudio_client_check.stdout != '200'
 
@@ -527,7 +528,8 @@
       "introspect_tokens": true
     }' 2>&1
   register: _bastudio_client_update
-  changed_when: true
+  changed_when: _bastudio_client_update.rc == 0
+  ignore_errors: true
   no_log: true
 
 - name: Check if PSLiberty OIDC client already registered
@@ -559,10 +561,8 @@
       "introspect_tokens": true
     }' 2>&1
   register: _psliberty_reg
-  changed_when: true
-  failed_when: >
-    _psliberty_reg.rc != 0 and
-    'already exists' not in _psliberty_reg.stdout | lower
+  changed_when: _psliberty_reg.rc == 0
+  ignore_errors: true
   no_log: true
   when: _psliberty_client_check.stdout != '200'
 
@@ -585,7 +585,8 @@
       "introspect_tokens": true
     }' 2>&1
   register: _psliberty_update
-  changed_when: true
+  changed_when: _psliberty_update.rc == 0
+  ignore_errors: true
   no_log: true
 
 - name: UMS summary
