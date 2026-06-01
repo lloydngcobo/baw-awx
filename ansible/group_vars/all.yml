@@ -39,8 +39,8 @@ icn_image:        "cp.icr.io/cp/cp4a/ban/navigator:ga-320-icn"
 graphql_image:    "cp.icr.io/cp/cp4a/fncm/graphql:ga-570-p8cgql"
 ums_image:        "cp.icr.io/cp/cp4a/ums/ums:25.0.1"
 bastudio_image:   "cp.icr.io/cp/cp4a/bas/workflow-authoring:25.0.1"
-baw_runtime_image: "cp.icr.io/cp/cp4a/bas/workflow-runtime:25.0.1"
-ae_image:         "cp.icr.io/cp/cp4a/aae/ae:25.0.1"
+baw_runtime_image: "cp.icr.io/cp/cp4a/baw/workflow-server:25.0.1"
+ae_image:         "cp.icr.io/cp/cp4a/aae/solution-server:25.0.1"
 odm_image:        "cp.icr.io/cp/cp4a/odm/odm:25.0.1"
 
 # --- License ---
