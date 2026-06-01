@@ -80,6 +80,9 @@
           MAX_SESSIONS: "10000"
           SESSION_STORE: "memory"
 
+          # Logging — IBM DBA pino logger requires uppercase level
+          LOG_LEVEL: "INFO"
+
           # Security
           CSP_DISABLED: "true"
           RESTRICT_MODE: "false"
