@@ -292,6 +292,10 @@
                     subPath: ssl-config.xml
                   - name: tls
                     mountPath: /shared/tls/pkcs12
+                  # ICMAPIPlugin JARs written here by case-init job (via bastudio-case-init PVC)
+                  - name: icm-plugins
+                    mountPath: /opt/ibm/plugins/properties
+                    subPath: properties
             volumes:
               - name: data
                 persistentVolumeClaim:
@@ -314,6 +318,11 @@
                       path: server.p12
                     - key: trusts.p12
                       path: trusts.p12
+              # Shared PVC with case-init job: case-init writes ICMAPIPlugin.jar to
+              # /opt/ibm/icm/shared/properties/, ICN reads it at /opt/ibm/plugins/properties/
+              - name: icm-plugins
+                persistentVolumeClaim:
+                  claimName: bastudio-case-init
 
 # ── Service ───────────────────────────────────────────────────────────────────
 
