@@ -170,9 +170,9 @@ deploy_icn:         true    # IBM Content Navigator
 deploy_graphql:     true    # FileNet GraphQL API
 deploy_ums:         true    # User Management Service (required for BAStudio)
 deploy_bastudio:    true    # BAStudio workflow authoring
-deploy_baw_runtime: false   # BAW standalone runtime
-deploy_app_engine:  false   # App Engine (Playback Server)
-deploy_odm:         false   # Operational Decision Manager
+deploy_baw_runtime: true    # BAW standalone runtime
+deploy_app_engine:  true    # App Engine (Playback Server)
+deploy_odm:         true    # Operational Decision Manager
 
 # =============================================================================
 # Timeouts (seconds)

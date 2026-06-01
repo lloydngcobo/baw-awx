@@ -143,9 +143,19 @@
       tags: [baw_runtime, step11]
       when: deploy_baw_runtime | default(false) | bool
 
-    # Step 12 — ArgoCD GitOps (optional)
+    # Step 12 — App Engine / Playback Server (optional)
+    - role: app_engine
+      tags: [app_engine, step12]
+      when: deploy_app_engine | default(false) | bool
+
+    # Step 13 — Operational Decision Manager (optional)
+    - role: odm
+      tags: [odm, step13]
+      when: deploy_odm | default(false) | bool
+
+    # Step 14 — ArgoCD GitOps (optional)
     - role: argocd
-      tags: [argocd, step12]
+      tags: [argocd, step14]
       when: configure_argocd | default(false) | bool
 
   post_tasks:
@@ -165,12 +175,22 @@
           - "  Cluster  : {{ ocp_api_url }}"
           - "  BAW host : https://{{ baw_hostname }}"
           - ""
-          - "  Access URLs:"
+          - "  Core Access URLs:"
           - "    BAStudio     : https://{{ baw_hostname }}/bas/CaseManager"
           - "    ICN          : https://{{ baw_hostname }}/navigator/"
           - "    CPE          : https://{{ baw_hostname }}/acce/"
           - "    GraphQL      : https://{{ baw_hostname }}/content-services-graphql/"
           - "    UMS          : https://{{ baw_hostname }}/ums/"
+          - ""
+          - "{% if deploy_baw_runtime | default(false) %}  Optional Runtime URLs:
+          - "    BAW Runtime  : https://{{ baw_hostname }}/baw/"
+          - "{% endif %}"
+          - "{% if deploy_app_engine | default(false) %}  Optional Runtime URLs (cont):
+          - "    App Engine   : https://{{ baw_hostname }}/playback/"
+          - "{% endif %}"
+          - "{% if deploy_odm | default(false) %}  Optional Runtime URLs (cont):
+          - "    ODM          : https://{{ baw_hostname }}/res/"
+          - "{% endif %}"
           - ""
           - "  Default credentials: bawadmin / {{ ldap_admin_password }}"
           - "  FileNet admin     : p8admin / {{ cpe_admin_password }}"
