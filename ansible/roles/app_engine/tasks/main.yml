@@ -96,16 +96,19 @@
         BIZ_ORCH_SERVER_ORIGIN: "https://{{ baw_hostname }}"
         BIZ_ORCH_SERVER_ORIGIN_INTERNAL: "https://bastudio-svc.{{ baw_namespace }}.svc.cluster.local:9443"
 
-        # Public endpoint
-        PUBLIC_HOSTNAME: "{{ baw_hostname }}"
+        # Public endpoint — App Engine is on its OWN dedicated host (baw-ae),
+        # not the shared baw_hostname. PUBLIC_HOSTNAME drives the URLs it builds
+        # for itself (including the OIDC redirect target).
+        PUBLIC_HOSTNAME: "{{ baw_ae_hostname }}"
         PUBLIC_HTTPS_PORT: "443"
         INTERNAL_HOSTNAME: "baw-ae-service.{{ baw_namespace }}.svc.cluster.local"
         INTERNAL_HTTPS_PORT: "443"
 
-        # OIDC callback
+        # OIDC callback — must be on the baw-ae host AND registered as a
+        # redirect on the UMS 'baw-ae' client (see ums role).
         CONTEXT_ROOT_PREFIX: ""
         SESSION_COOKIE_PATH: "/"
-        OPENID_CALLBACK_URL: "https://{{ baw_hostname }}/auth/openidconnect/callback"
+        OPENID_CALLBACK_URL: "https://{{ baw_ae_hostname }}/auth/openidconnect/callback"
 
         # Misc
         PURGE_STALE_APPS_INTERVAL: "86400000"

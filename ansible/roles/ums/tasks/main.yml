@@ -278,6 +278,8 @@
                         responseTypes="code token id_token"
                         introspectTokens="true"
                         enabled="true">
+                  <!-- App Engine runs on its own dedicated host (baw-ae). -->
+                  <redirect>https://{{ baw_ae_hostname }}/auth/openidconnect/callback</redirect>
                   <redirect>https://{{ baw_hostname }}/auth/openidconnect/callback</redirect>
                 </client>
               </localStore>

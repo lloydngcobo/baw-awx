@@ -78,6 +78,11 @@
         baw_hostname: "{{ baw_subdomain }}.{{ effective_ingress_domain }}"
       tags: always
 
+    - name: Set effective App Engine hostname (dedicated host)
+      ansible.builtin.set_fact:
+        baw_ae_hostname: "{{ baw_ae_subdomain }}.{{ effective_ingress_domain }}"
+      tags: always
+
     - name: Display deployment target
       ansible.builtin.debug:
         msg:
