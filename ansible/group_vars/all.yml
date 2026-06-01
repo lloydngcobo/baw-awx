@@ -20,6 +20,10 @@ cluster_ingress_domain: ""
 # e.g. baw.apps.homelab.home.nl
 baw_subdomain: "baw"
 
+# App Engine gets a DEDICATED hostname (it serves root paths /, /v1, /ProcessPortal
+# which would collide with the shared baw_hostname). e.g. baw-ae.apps.homelab.home.nl
+baw_ae_subdomain: "baw-ae"
+
 # --- Namespaces ---
 baw_namespace:   "baw"
 infra_namespace: "infra"

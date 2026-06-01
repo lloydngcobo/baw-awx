@@ -30,12 +30,16 @@
     name: shared-ssl-config
     namespace: "{{ baw_namespace }}"
   register: _ssl_cm
-  when: deploy_ums | default(true) | bool
+  when: >
+    deploy_ums | default(true) | bool or
+    deploy_app_engine | default(false) | bool
 
 - name: Set BAW CA cert fact
   ansible.builtin.set_fact:
     _baw_ca_cert: "{{ _ssl_cm.resources[0].data['ca.crt'] }}"
-  when: deploy_ums | default(true) | bool
+  when: >
+    deploy_ums | default(true) | bool or
+    deploy_app_engine | default(false) | bool
 
 - name: Create CPE ACCE route
   kubernetes.core.k8s:
@@ -288,6 +292,111 @@
           name: baw-runtime-svc
   when: deploy_baw_runtime | default(false) | bool
 
+# ── ODM routes (Liberty pods serve HTTP → edge termination) ───────────────────
+#   /decisioncenter   → odm-dc-svc:9060   Decision Center (rule authoring UI)
+#   /res              → odm-dsc-svc:9080  Decision Server Console (admin)
+#   /DecisionService  → odm-dsr-svc:9080  Decision Server Runtime (REST execution)
+
+- name: Create ODM Decision Center route
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: odm-decisioncenter-route
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+      spec:
+        host: "{{ baw_hostname }}"
+        path: /decisioncenter
+        port:
+          targetPort: http
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+        to:
+          kind: Service
+          name: odm-dc-svc
+  when: deploy_odm | default(false) | bool
+
+- name: Create ODM Decision Server Console route
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: odm-decisionserverconsole-route
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+      spec:
+        host: "{{ baw_hostname }}"
+        path: /res
+        port:
+          targetPort: http
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+        to:
+          kind: Service
+          name: odm-dsc-svc
+  when: deploy_odm | default(false) | bool
+
+- name: Create ODM Decision Server Runtime route
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: odm-decisionserverruntime-route
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+      spec:
+        host: "{{ baw_hostname }}"
+        path: /DecisionService
+        port:
+          targetPort: http
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+        to:
+          kind: Service
+          name: odm-dsr-svc
+  when: deploy_odm | default(false) | bool
+
+# ── App Engine route (HTTPS-only Node.js on 3001 → reencrypt) ─────────────────
+# App Engine serves root paths (/, /v1, /ProcessPortal) so it gets a DEDICATED
+# host rather than a path on baw_hostname. baw-ae-service port 443 → targetPort 3001.
+
+- name: Create App Engine route
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: app-engine-route
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+      spec:
+        host: "{{ baw_ae_subdomain }}.{{ effective_ingress_domain }}"
+        port:
+          targetPort: https
+        tls:
+          termination: reencrypt
+          insecureEdgeTerminationPolicy: Redirect
+          destinationCACertificate: "{{ _baw_ca_cert }}"
+        to:
+          kind: Service
+          name: baw-ae-service
+  when: deploy_app_engine | default(false) | bool
+
 - name: Routes summary
   ansible.builtin.debug:
     msg:
@@ -297,3 +406,8 @@
       - "  GraphQL    : https://{{ baw_hostname }}/content-services-graphql/"
       - "  UMS        : https://{{ baw_hostname }}/ums/"
       - "  BAStudio   : https://{{ baw_hostname }}/bas/"
+      - "  BAW Runtime: https://{{ baw_hostname }}/baw/"
+      - "  ODM DC     : https://{{ baw_hostname }}/decisioncenter"
+      - "  ODM Console: https://{{ baw_hostname }}/res"
+      - "  ODM Runtime: https://{{ baw_hostname }}/DecisionService"
+      - "  App Engine : https://{{ baw_ae_subdomain }}.{{ effective_ingress_domain }}/"
