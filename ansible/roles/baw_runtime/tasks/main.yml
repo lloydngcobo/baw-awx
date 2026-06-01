@@ -184,6 +184,8 @@
                     value: "https://{{ baw_hostname }}/ums"
                   - name: TZ
                     value: "{{ timezone }}"
+                  - name: DB_TYPE
+                    value: "POSTGRESQL"
                   - name: JVM_HEAP_XMS
                     value: "1024m"
                   - name: JVM_HEAP_XMX
