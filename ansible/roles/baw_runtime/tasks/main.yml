@@ -118,6 +118,40 @@
 
 # ── Storage ───────────────────────────────────────────────────────────────────
 
+# ── Startup scripts (PostgreSQL driver download) ─────────────────────────────
+# workflow-server:25.0.1 does NOT ship a PostgreSQL JDBC driver.
+# liberty-start.sh runs scripts from shared/scripts/*.sh before Liberty starts.
+# We mount a download script that fetches the driver into an emptyDir volume.
+
+- name: Create BAW Runtime startup scripts ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: baw-runtime-startup-scripts
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-runtime
+      data:
+        02-download-postgresql-driver.sh: |
+          #!/bin/bash
+          DRIVER_DIR="/opt/ibm/wlp/usr/shared/resources/db/postgres"
+          DRIVER_JAR="${DRIVER_DIR}/postgresql.jar"
+          JDBC_URL="https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar"
+          mkdir -p "${DRIVER_DIR}"
+          if [[ -f "${DRIVER_JAR}" ]]; then
+              echo "02-download-postgresql-driver: JAR already present — skipping"
+              exit 0
+          fi
+          echo "02-download-postgresql-driver: Downloading PostgreSQL JDBC driver..."
+          curl -sSf --connect-timeout 30 --retry 3 --retry-delay 5 \
+               -o "${DRIVER_JAR}" "${JDBC_URL}"
+          echo "02-download-postgresql-driver: Done → $(ls -lh ${DRIVER_JAR})"
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+
 - name: Create BAW Runtime data PVC
   kubernetes.core.k8s:
     state: present
@@ -238,6 +272,11 @@
                     subPath: ssl-config.xml
                   - name: tls
                     mountPath: /shared/tls/pkcs12
+                  - name: startup-scripts
+                    mountPath: /shared/scripts/02-download-postgresql-driver.sh
+                    subPath: 02-download-postgresql-driver.sh
+                  - name: postgresql-jdbc-driver
+                    mountPath: /opt/ibm/wlp/usr/shared/resources/db/postgres
             volumes:
               - name: data
                 persistentVolumeClaim:
@@ -257,6 +296,12 @@
                       path: server.p12
                     - key: trusts.p12
                       path: trusts.p12
+              - name: startup-scripts
+                configMap:
+                  name: baw-runtime-startup-scripts
+                  defaultMode: 0755
+              - name: postgresql-jdbc-driver
+                emptyDir: {}
 
 # ── Service ───────────────────────────────────────────────────────────────────
 
