@@ -1200,6 +1200,142 @@
     -n {{ baw_namespace }} --timeout={{ pod_ready_timeout }}s
   changed_when: false
 
+- name: Create content-init PersistentVolumeClaim
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: job-baw-content-init-pvc
+        namespace: "{{ baw_namespace }}"
+      spec:
+        accessModes:
+          - ReadWriteMany
+        storageClassName: "{{ storage_class_name }}"
+        resources:
+          requests:
+            storage: 2Gi
+
+- name: Create BAStudio content-init Job
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: job-baw-content-init
+        namespace: "{{ baw_namespace }}"
+        labels:
+          name: job-baw-content-init
+      spec:
+        completions: 1
+        parallelism: 1
+        backoffLimit: 30
+        manualSelector: false
+        suspend: false
+        podReplacementPolicy: TerminatingOrFailed
+        completionMode: NonIndexed
+        template:
+          metadata:
+            labels:
+              name: job-baw-content-init
+          spec:
+            restartPolicy: OnFailure
+            serviceAccount: default
+            serviceAccountName: default
+            terminationGracePeriodSeconds: 30
+            automountServiceAccountToken: false
+            dnsPolicy: ClusterFirst
+            securityContext:
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+              - name: contentintegration-init-job
+                image: "cp.icr.io/cp/cp4a/baw/iaws-ps-content-integration:25.0.1"
+                imagePullPolicy: IfNotPresent
+                securityContext:
+                  capabilities:
+                    drop:
+                      - ALL
+                  privileged: false
+                  runAsNonRoot: true
+                  readOnlyRootFilesystem: true
+                  allowPrivilegeEscalation: false
+                command:
+                  - sh
+                  - '-c'
+                args:
+                  - /home/config/config-script.sh
+                terminationMessagePath: /dev/termination-log
+                terminationMessagePolicy: File
+                env:
+                  - name: CREDENTIAL_FOLDER
+                    value: /credentials/
+                  - name: CPE_URL
+                    value: "https://cpe-svc.{{ baw_namespace }}.svc.cluster.local:9443/wsi/FNCEWS40MTOM"
+                  - name: IS_SECURE
+                    value: T
+                  - name: DOMAIN_NAME
+                    value: P8Domain
+                  - name: OBJECTSTORE_NAME
+                    value: DOS
+                  - name: EVENTHANDLER_PATH
+                    value: /home/config/docs-config
+                  - name: BPMCALLBACK_URL
+                    value: "https://bastudio-svc.{{ baw_namespace }}.svc.cluster.local:9443/bas/rest/bpm/wle"
+                  - name: Enable_EventHandler
+                    value: "true"
+                resources:
+                  limits:
+                    cpu: "1"
+                    ephemeral-storage: 2Gi
+                    memory: 512Mi
+                  requests:
+                    cpu: 100m
+                    ephemeral-storage: 1Gi
+                    memory: 128Mi
+                volumeMounts:
+                  - name: temp-folder
+                    mountPath: /tmp
+                  - name: temp-folder
+                    mountPath: /home/config/certs
+                  - name: credentials-env
+                    mountPath: /credentials
+                  - name: ca-tls-volume
+                    mountPath: /shared/resources/cert-trusted
+                  - name: log-pvc
+                    mountPath: /logs/application
+            volumes:
+              - name: temp-folder
+                emptyDir: {}
+              - name: ca-tls-volume
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - name: log-pvc
+                persistentVolumeClaim:
+                  claimName: job-baw-content-init-pvc
+              - name: credentials-env
+                secret:
+                  secretName: cpe-secret
+                  defaultMode: 420
+                  items:
+                    - key: CPE_ADMIN_USER
+                      path: CPE_USERNAME
+                    - key: CPE_ADMIN_PASSWORD
+                      path: CPE_PASSWORD
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+
+- name: Wait for content-init job to complete
+  ansible.builtin.shell: >
+    kubectl wait --for=condition=complete job/job-baw-content-init
+    -n {{ baw_namespace }} --timeout={{ bastudio_job_timeout }}s
+  changed_when: false
+
 - name: BAStudio summary
   ansible.builtin.debug:
     msg:
