@@ -247,6 +247,11 @@
                   <redirect>https://{{ baw_hostname }}/bas/oidcclient/redirect/bastudio</redirect>
                   <redirect>https://{{ baw_hostname }}/oidcclient/redirect/umsClient</redirect>
                   <redirect>https://{{ baw_hostname }}/bas/oidcclient/redirect/umsClient</redirect>
+                  <!-- BAStudio's Liberty umsClient sends the redirect_uri WITH the
+                       explicit :443 port. OAuth matches redirect_uri by exact string,
+                       so this variant is required (CWOAU0062E without it). -->
+                  <redirect>https://{{ baw_hostname }}:443/oidcclient/redirect/umsClient</redirect>
+                  <redirect>https://{{ baw_hostname }}:443/bas/oidcclient/redirect/umsClient</redirect>
                 </client>
                 <!-- UMS internal client -->
                 <client name="umsinternalclientid"
