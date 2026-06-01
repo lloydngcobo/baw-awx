@@ -235,7 +235,7 @@
               <localStore>
                 <!-- BAStudio: publishApplication.sh + browser login -->
                 <client name="bastudio"
-                        secret="{{ ums_admin_password }}"
+                        secret="{{ bastudio_oidc_client_secret }}"
                         scope="openid profile email"
                         preAuthorizedScope="openid profile email"
                         grantTypes="authorization_code implicit client_credentials password refresh_token"
@@ -261,9 +261,11 @@
                         responseTypes="code token id_token"
                         introspectTokens="true"
                         enabled="true" />
-                <!-- BAW Runtime -->
+                <!-- BAW Runtime — secret must match baw-runtime's
+                     UMS_INTERNAL_CLIENT_SECRET (ums_internal_client_secret),
+                     not ums_admin_password, or Process Portal login SEND_401. -->
                 <client name="PSLiberty"
-                        secret="{{ ums_admin_password }}"
+                        secret="{{ ums_internal_client_secret }}"
                         scope="openid profile email"
                         preAuthorizedScope="openid profile email"
                         grantTypes="authorization_code implicit client_credentials password refresh_token"
