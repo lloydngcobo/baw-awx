@@ -1201,6 +1201,15 @@
     -n {{ baw_namespace }} --timeout={{ pod_ready_timeout }}s
   changed_when: false
 
+- name: Check if content-init Job already completed
+  ansible.builtin.shell: >
+    oc get job job-baw-content-init -n {{ baw_namespace }}
+    -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}'
+    2>/dev/null || echo ""
+  register: _content_init_done
+  changed_when: false
+  failed_when: false
+
 - name: Create content-init PersistentVolumeClaim
   kubernetes.core.k8s:
     state: present
@@ -1330,12 +1339,23 @@
                       path: CPE_PASSWORD
             imagePullSecrets:
               - name: ibm-entitlement-key
+  when: _content_init_done.stdout != 'True'
 
 - name: Wait for content-init job to complete
   ansible.builtin.shell: >
     kubectl wait --for=condition=complete job/job-baw-content-init
     -n {{ baw_namespace }} --timeout={{ bastudio_job_timeout }}s
   changed_when: false
+  when: _content_init_done.stdout != 'True'
+
+- name: Check if case-init Job already completed
+  ansible.builtin.shell: >
+    oc get job job-bastudio-case-init -n {{ baw_namespace }}
+    -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}'
+    2>/dev/null || echo ""
+  register: _case_init_done
+  changed_when: false
+  failed_when: false
 
 - name: Create case-init PersistentVolumeClaim
   kubernetes.core.k8s:
@@ -1523,12 +1543,14 @@
                   items:
                     - key: ca.crt
                       path: ca.crt
+  when: _case_init_done.stdout != 'True'
 
 - name: Wait for case-init job to complete
   ansible.builtin.shell: >
     kubectl wait --for=condition=complete job/job-bastudio-case-init
     -n {{ baw_namespace }} --timeout={{ bastudio_job_timeout }}s
   changed_when: false
+  when: _case_init_done.stdout != 'True'
 
 - name: Create bas-secrets for workplace-init
   kubernetes.core.k8s:
@@ -1549,6 +1571,15 @@
         oidcClientSecret: "{{ ums_admin_password }}"
         navigatorUsername: "{{ cpe_admin_user }}"
         navigatorPassword: "{{ cpe_admin_password }}"
+
+- name: Check if workplace-init Job already completed
+  ansible.builtin.shell: >
+    oc get job job-bas-workplace -n {{ baw_namespace }}
+    -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}'
+    2>/dev/null || echo ""
+  register: _workplace_init_done
+  changed_when: false
+  failed_when: false
 
 - name: Create BAStudio workplace-init Job
   kubernetes.core.k8s:
@@ -1705,12 +1736,14 @@
                             path: NAVIGATOR_PASSWORD
             imagePullSecrets:
               - name: ibm-entitlement-key
+  when: _workplace_init_done.stdout != 'True'
 
 - name: Wait for workplace-init job to complete
   ansible.builtin.shell: >
     kubectl wait --for=condition=complete job/job-bas-workplace
     -n {{ baw_namespace }} --timeout={{ bastudio_job_timeout }}s
   changed_when: false
+  when: _workplace_init_done.stdout != 'True'
 
 - name: BAStudio summary
   ansible.builtin.debug:
