@@ -116,6 +116,21 @@
             <sslDefault sslRef="defaultSSLConfig"/>
           </server>
 
+        transport.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!--
+            Override the Liberty httpEndpoint to bind on container ports.
+            The default config uses ${http_port}=-1 (HTTP disabled) and
+            ${https_port}=443 (privileged, can't bind). Without this override
+            port 9080 never opens and the health probe always fails.
+          -->
+          <server>
+            <httpEndpoint id="defaultHttpEndpoint"
+              host="*"
+              httpPort="9080"
+              httpsPort="9443"/>
+          </server>
+
 # ── Storage ───────────────────────────────────────────────────────────────────
 
 # ── Startup scripts (PostgreSQL driver download) ─────────────────────────────
@@ -270,6 +285,9 @@
                   - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ssl-config.xml
                     subPath: ssl-config.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/transport.xml
+                    subPath: transport.xml
                   - name: tls
                     mountPath: /shared/tls/pkcs12
                   - name: startup-scripts
