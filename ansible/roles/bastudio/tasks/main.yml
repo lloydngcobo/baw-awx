@@ -1545,7 +1545,7 @@
         umsAdminUser: "{{ ums_admin_user }}"
         umsAdminPassword: "{{ ums_admin_password }}"
         oidcClientId: bastudio
-        oidcClientSecret: bastudio-secret-key
+        oidcClientSecret: "{{ ums_admin_password }}"
         navigatorUsername: "{{ cpe_admin_user }}"
         navigatorPassword: "{{ cpe_admin_password }}"
 
