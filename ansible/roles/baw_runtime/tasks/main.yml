@@ -20,10 +20,8 @@
       stringData:
         BAW_ADMIN_USER:              "{{ ums_admin_user }}"
         BAW_ADMIN_PASSWORD:          "{{ ums_admin_password }}"
-        BAW_RT_DB_USER:              "{{ baw_rt_db_user }}"
-        BAW_RT_DB_PASS:              "{{ baw_rt_db_pass }}"
-        BAW_PDW_DB_USER:             "{{ baw_pdw_db_user }}"
-        BAW_PDW_DB_PASS:             "{{ baw_pdw_db_pass }}"
+        BAW_DB_USER:                 "{{ bas_db_user }}"
+        BAW_DB_PASS:                 "{{ bas_db_pass }}"
         LDAP_BIND_PASSWORD:          "{{ ldap_bind_password }}"
         KEYSTORE_PASSWORD:           "{{ keystore_password }}"
         LTPA_PASSWORD:               "{{ ltpa_password }}"
@@ -46,34 +44,27 @@
       data:
         db-datasources.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
+          <!--
+            SHARED DATABASE: workflow-server uses the same database as workflow-authoring
+            so they can share process applications, snapshots, and runtime data.
+            JNDI name jdbc/TeamWorksDB is required by the BAW runtime image.
+          -->
           <server>
             <library id="PostgreSQLLib">
               <fileset dir="/opt/ibm/wlp/usr/shared/resources/db/postgres"
                        includes="*.jar"/>
             </library>
 
-            <dataSource id="BAWRUNTIMEDS" jndiName="jdbc/BAWRuntimeDS"
+            <dataSource id="jdbc/TeamWorksDB" jndiName="jdbc/TeamWorksDB"
                         type="javax.sql.XADataSource">
               <jdbcDriver libraryRef="PostgreSQLLib"/>
               <properties.postgresql
                 serverName="{{ postgres_host }}"
                 portNumber="{{ postgres_port }}"
-                databaseName="{{ baw_rt_db_name }}"
-                user="${env.BAW_RT_DB_USER}"
-                password="${env.BAW_RT_DB_PASS}"/>
-              <connectionManager maxPoolSize="20" minPoolSize="1"/>
-            </dataSource>
-
-            <dataSource id="BAWPDWDS" jndiName="jdbc/BAWPDWDS"
-                        type="javax.sql.XADataSource">
-              <jdbcDriver libraryRef="PostgreSQLLib"/>
-              <properties.postgresql
-                serverName="{{ postgres_host }}"
-                portNumber="{{ postgres_port }}"
-                databaseName="{{ baw_pdw_db_name }}"
-                user="${env.BAW_PDW_DB_USER}"
-                password="${env.BAW_PDW_DB_PASS}"/>
-              <connectionManager maxPoolSize="10" minPoolSize="1"/>
+                databaseName="{{ bas_db_name }}"
+                user="${env.BAW_DB_USER}"
+                password="${env.BAW_DB_PASS}"/>
+              <connectionManager maxPoolSize="200" minPoolSize="1"/>
             </dataSource>
           </server>
 
