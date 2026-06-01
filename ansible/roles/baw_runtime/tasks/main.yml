@@ -247,26 +247,20 @@
                     memory: 4Gi
                     cpu: "2"
                 livenessProbe:
-                  httpGet:
-                    path: /health
+                  tcpSocket:
                     port: 9443
-                    scheme: HTTPS
                   initialDelaySeconds: 120
                   periodSeconds: 30
                   failureThreshold: 10
                 readinessProbe:
-                  httpGet:
-                    path: /health
+                  tcpSocket:
                     port: 9443
-                    scheme: HTTPS
                   initialDelaySeconds: 90
                   periodSeconds: 15
                   failureThreshold: 20
                 startupProbe:
-                  httpGet:
-                    path: /health
+                  tcpSocket:
                     port: 9443
-                    scheme: HTTPS
                   periodSeconds: 15
                   failureThreshold: 60
                 volumeMounts:
