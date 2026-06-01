@@ -1,9 +1,10 @@
 ---
 # Role: odm
-# Deploys IBM Operational Decision Manager (ODM) 25.0.1
-# Business rules engine for decision automation in workflows.
+# Deploys IBM Operational Decision Manager (ODM) 9.0.0.0
+# Four components: Decision Center, Server Console, Server Runtime, Decision Runner.
 # Only runs when deploy_odm: true.
-# Requires: CPE, UMS running. Uses separate ODM databases.
+# Requires: PostgreSQL, LDAP running. Uses odm_db database.
+# Ref: baw-microshift-rhel/install/odm/
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 
@@ -19,95 +20,48 @@
         labels:
           app: odm
       stringData:
-        ODM_ADMIN_USER:              "{{ ums_admin_user }}"
-        ODM_ADMIN_PASSWORD:          "{{ ums_admin_password }}"
-        LDAP_BIND_PASSWORD:          "{{ ldap_bind_password }}"
-        KEYSTORE_PASSWORD:           "{{ keystore_password }}"
-        LTPA_PASSWORD:               "{{ ltpa_password }}"
-        UMS_INTERNAL_CLIENT_SECRET:  "{{ ums_internal_client_secret }}"
+        DB_PASSWORD:       "{{ odm_db_pass }}"
+        LDAP_BIND_PASSWORD: "{{ ldap_bind_password }}"
+        KEYSTORE_PASSWORD: "{{ keystore_password }}"
   no_log: true
 
-# ── Liberty server config ─────────────────────────────────────────────────────
+# ── ConfigMap ─────────────────────────────────────────────────────────────────
 
-- name: Create ODM Liberty config ConfigMap
+- name: Create ODM configuration ConfigMap
   kubernetes.core.k8s:
     state: present
     definition:
       apiVersion: v1
       kind: ConfigMap
       metadata:
-        name: odm-liberty-config
+        name: odm-config
         namespace: "{{ baw_namespace }}"
         labels:
           app: odm
       data:
-        ldap-registry.xml: |
-          <?xml version="1.0" encoding="UTF-8"?>
-          <server>
-            <ldapRegistry id="LDAPUserRegistry"
-              realm="defaultWIMFileBasedRealm"
-              host="{{ ldap_host }}"
-              port="{{ ldap_port }}"
-              baseDN="{{ ldap_base_dn }}"
-              bindDN="{{ ldap_bind_dn }}"
-              bindPassword="${env.LDAP_BIND_PASSWORD}"
-              ldapType="Custom">
-              <ldapEntityType name="PersonAccount">
-                <rdnProperty name="uid"/>
-                <objectClass>inetOrgPerson</objectClass>
-              </ldapEntityType>
-              <ldapEntityType name="Group">
-                <rdnProperty name="cn"/>
-                <objectClass>groupOfNames</objectClass>
-                <memberAttribute name="member"/>
-              </ldapEntityType>
-              <userFilter
-                filter="(&amp;(uid=%v)(objectclass=inetOrgPerson))"/>
-              <groupFilter
-                filter="(&amp;(cn=%v)(objectclass=groupOfNames))"/>
-              <userIdMap filter="uid"/>
-              <groupIdMap filter="cn"/>
-              <groupMemberIdMap filter="member"/>
-            </ldapRegistry>
-          </server>
-
-        ssl-config.xml: |
-          <?xml version="1.0" encoding="UTF-8"?>
-          <server>
-            <keyStore id="defaultKeyStore"
-              location="/shared/tls/pkcs12/server.p12"
-              password="${env.KEYSTORE_PASSWORD}"
-              type="PKCS12"/>
-            <keyStore id="defaultTrustStore"
-              location="/shared/tls/pkcs12/trusts.p12"
-              password="${env.KEYSTORE_PASSWORD}"
-              type="PKCS12"/>
-            <ssl id="defaultSSLConfig"
-              keyStoreRef="defaultKeyStore"
-              trustStoreRef="defaultTrustStore"
-              sslProtocol="TLSv1.2"/>
-            <sslDefault sslRef="defaultSSLConfig"/>
-          </server>
-
-        transport.xml: |
-          <?xml version="1.0" encoding="UTF-8"?>
-          <server>
-            <httpEndpoint id="defaultHttpEndpoint"
-              host="*"
-              httpPort="9080"
-              httpsPort="9443"/>
-          </server>
+        DB_TYPE:           "postgresql"
+        DB_SERVER_NAME:    "{{ postgres_host }}"
+        DB_PORT_NUMBER:    "{{ postgres_port }}"
+        DB_NAME:           "{{ odm_db_name }}"
+        DB_USER:           "{{ odm_db_user }}"
+        LDAP_SERVER:       "ldap://{{ ldap_host }}:{{ ldap_port }}"
+        LDAP_BASE_DN:      "{{ ldap_base_dn }}"
+        LDAP_BIND_DN:      "{{ ldap_bind_dn }}"
+        LDAP_USER_FILTER:  "(&(uid=%v)(objectclass=inetOrgPerson))"
+        LDAP_GROUP_FILTER: "(&(cn=%v)(objectclass=groupOfNames))"
+        SAMPLE_MODE:       "false"
+        TZ:                "{{ timezone }}"
 
 # ── Storage ───────────────────────────────────────────────────────────────────
 
-- name: Create ODM data PVC
+- name: Create ODM Decision Center PVC
   kubernetes.core.k8s:
     state: present
     definition:
       apiVersion: v1
       kind: PersistentVolumeClaim
       metadata:
-        name: odm-pvc
+        name: odm-dc-pvc
         namespace: "{{ baw_namespace }}"
         labels:
           app: odm
@@ -115,12 +69,12 @@
         accessModes: [ReadWriteMany]
         resources:
           requests:
-            storage: 10Gi
+            storage: 5Gi
         storageClassName: "{{ storage_class_name }}"
 
-# ── Deployment ────────────────────────────────────────────────────────────────
+# ── 1. Decision Center ────────────────────────────────────────────────────────
 
-- name: Deploy ODM
+- name: Deploy ODM Decision Center
   kubernetes.core.k8s:
     state: present
     apply: true
@@ -128,19 +82,22 @@
       apiVersion: apps/v1
       kind: Deployment
       metadata:
-        name: odm
+        name: odm-decisioncenter
         namespace: "{{ baw_namespace }}"
         labels:
           app: odm
+          component: decisioncenter
       spec:
         replicas: 1
         selector:
           matchLabels:
             app: odm
+            component: decisioncenter
         template:
           metadata:
             labels:
               app: odm
+              component: decisioncenter
           spec:
             imagePullSecrets:
               - name: ibm-entitlement-key
@@ -148,8 +105,116 @@
               runAsUser: 1000140000
               fsGroup: 1000140000
             containers:
-              - name: odm
-                image: "{{ odm_image }}"
+              - name: decisioncenter
+                image: "{{ odm_dc_image }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - containerPort: 9060
+                    name: http
+                  - containerPort: 9453
+                    name: https
+                envFrom:
+                  - configMapRef:
+                      name: odm-config
+                env:
+                  - name: DB_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: odm-secret
+                        key: DB_PASSWORD
+                  - name: LDAP_BIND_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: odm-secret
+                        key: LDAP_BIND_PASSWORD
+                resources:
+                  requests:
+                    memory: 1Gi
+                    cpu: 500m
+                  limits:
+                    memory: 3Gi
+                    cpu: "2"
+                readinessProbe:
+                  tcpSocket:
+                    port: 9453
+                  initialDelaySeconds: 60
+                  periodSeconds: 15
+                  failureThreshold: 20
+                volumeMounts:
+                  - name: data
+                    mountPath: /opt/ibm/odm/decisioncenter
+                  - name: tls
+                    mountPath: /opt/ibm/odm/shared/tls
+            volumes:
+              - name: data
+                persistentVolumeClaim:
+                  claimName: odm-dc-pvc
+              - name: tls
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+
+- name: Create ODM Decision Center Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: odm-dc-svc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: odm
+          component: decisioncenter
+      spec:
+        selector:
+          app: odm
+          component: decisioncenter
+        ports:
+          - port: 9060
+            targetPort: 9060
+            name: http
+          - port: 9453
+            targetPort: 9453
+            name: https
+
+# ── 2. Decision Server Console ────────────────────────────────────────────────
+
+- name: Deploy ODM Decision Server Console
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: odm-decisionserverconsole
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: odm
+          component: decisionserverconsole
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: odm
+            component: decisionserverconsole
+        template:
+          metadata:
+            labels:
+              app: odm
+              component: decisionserverconsole
+          spec:
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+            securityContext:
+              runAsUser: 1000140000
+              fsGroup: 1000140000
+            containers:
+              - name: decisionserverconsole
+                image: "{{ odm_dsc_image }}"
                 imagePullPolicy: IfNotPresent
                 ports:
                   - containerPort: 9080
@@ -157,110 +222,49 @@
                   - containerPort: 9443
                     name: https
                 envFrom:
-                  - secretRef:
-                      name: odm-secret
+                  - configMapRef:
+                      name: odm-config
                 env:
-                  - name: CPE_URI
-                    value: "https://{{ cpe_host }}:{{ cpe_port }}/wsi/FNCEWS40MTOM/"
-                  - name: UMS_HOST
-                    value: "https://{{ baw_hostname }}/ums"
-                  - name: TZ
-                    value: "{{ timezone }}"
-                  - name: JVM_HEAP_XMS
-                    value: "512m"
-                  - name: JVM_HEAP_XMX
-                    value: "1024m"
-                  - name: ADMIN_USER
-                    value: "{{ ums_admin_user }}"
-                  - name: ADMIN_PASSWORD
+                  - name: DB_PASSWORD
                     valueFrom:
                       secretKeyRef:
                         name: odm-secret
-                        key: ODM_ADMIN_PASSWORD
+                        key: DB_PASSWORD
+                  - name: LDAP_BIND_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: odm-secret
+                        key: LDAP_BIND_PASSWORD
                 resources:
                   requests:
-                    memory: 1Gi
-                    cpu: 250m
+                    memory: 512Mi
+                    cpu: 500m
                   limits:
                     memory: 2Gi
-                    cpu: "1"
-                livenessProbe:
-                  httpGet:
-                    path: /res
-                    port: 9080
-                    scheme: HTTP
-                  initialDelaySeconds: 120
-                  periodSeconds: 30
-                  failureThreshold: 10
+                    cpu: "2"
                 readinessProbe:
-                  httpGet:
-                    path: /res
-                    port: 9080
-                    scheme: HTTP
-                  initialDelaySeconds: 90
+                  tcpSocket:
+                    port: 9443
+                  initialDelaySeconds: 60
                   periodSeconds: 15
                   failureThreshold: 20
-                startupProbe:
-                  httpGet:
-                    path: /res
-                    port: 9080
-                    scheme: HTTP
-                  periodSeconds: 15
-                  failureThreshold: 60
-                volumeMounts:
-                  - name: data
-                    mountPath: /opt/ibm/odm/data
-                  - name: logs
-                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/logs
-                  - name: overrides-dir
-                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides
-                  - name: liberty-config
-                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ldap-registry.xml
-                    subPath: ldap-registry.xml
-                  - name: liberty-config
-                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ssl-config.xml
-                    subPath: ssl-config.xml
-                  - name: liberty-config
-                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/transport.xml
-                    subPath: transport.xml
-                  - name: tls
-                    mountPath: /shared/tls/pkcs12
-            volumes:
-              - name: data
-                persistentVolumeClaim:
-                  claimName: odm-pvc
-              - name: logs
-                emptyDir: {}
-              - name: overrides-dir
-                emptyDir: {}
-              - name: liberty-config
-                configMap:
-                  name: odm-liberty-config
-              - name: tls
-                configMap:
-                  name: shared-ssl-config
-                  items:
-                    - key: server.p12
-                      path: server.p12
-                    - key: trusts.p12
-                      path: trusts.p12
 
-# ── Service ───────────────────────────────────────────────────────────────────
-
-- name: Create ODM Service
+- name: Create ODM Decision Server Console Service
   kubernetes.core.k8s:
     state: present
     definition:
       apiVersion: v1
       kind: Service
       metadata:
-        name: odm-svc
+        name: odm-dsc-svc
         namespace: "{{ baw_namespace }}"
         labels:
           app: odm
+          component: decisionserverconsole
       spec:
         selector:
           app: odm
+          component: decisionserverconsole
         ports:
           - port: 9080
             targetPort: 9080
@@ -269,16 +273,209 @@
             targetPort: 9443
             name: https
 
+# ── 3. Decision Server Runtime ────────────────────────────────────────────────
+
+- name: Deploy ODM Decision Server Runtime
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: odm-decisionserverruntime
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: odm
+          component: decisionserverruntime
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: odm
+            component: decisionserverruntime
+        template:
+          metadata:
+            labels:
+              app: odm
+              component: decisionserverruntime
+          spec:
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+            securityContext:
+              runAsUser: 1000140000
+              fsGroup: 1000140000
+            containers:
+              - name: decisionserverruntime
+                image: "{{ odm_dsr_image }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - containerPort: 9080
+                    name: http
+                  - containerPort: 9443
+                    name: https
+                envFrom:
+                  - configMapRef:
+                      name: odm-config
+                env:
+                  - name: DB_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: odm-secret
+                        key: DB_PASSWORD
+                  - name: LDAP_BIND_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: odm-secret
+                        key: LDAP_BIND_PASSWORD
+                resources:
+                  requests:
+                    memory: 512Mi
+                    cpu: 500m
+                  limits:
+                    memory: 2Gi
+                    cpu: "2"
+                readinessProbe:
+                  tcpSocket:
+                    port: 9443
+                  initialDelaySeconds: 60
+                  periodSeconds: 15
+                  failureThreshold: 20
+
+- name: Create ODM Decision Server Runtime Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: odm-dsr-svc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: odm
+          component: decisionserverruntime
+      spec:
+        selector:
+          app: odm
+          component: decisionserverruntime
+        ports:
+          - port: 9080
+            targetPort: 9080
+            name: http
+          - port: 9443
+            targetPort: 9443
+            name: https
+
+# ── 4. Decision Runner ────────────────────────────────────────────────────────
+
+- name: Deploy ODM Decision Runner
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: odm-decisionrunner
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: odm
+          component: decisionrunner
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: odm
+            component: decisionrunner
+        template:
+          metadata:
+            labels:
+              app: odm
+              component: decisionrunner
+          spec:
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+            securityContext:
+              runAsUser: 1000140000
+              fsGroup: 1000140000
+            containers:
+              - name: decisionrunner
+                image: "{{ odm_dr_image }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - containerPort: 9070
+                    name: http
+                  - containerPort: 9463
+                    name: https
+                envFrom:
+                  - configMapRef:
+                      name: odm-config
+                env:
+                  - name: DB_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: odm-secret
+                        key: DB_PASSWORD
+                  - name: LDAP_BIND_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: odm-secret
+                        key: LDAP_BIND_PASSWORD
+                resources:
+                  requests:
+                    memory: 512Mi
+                    cpu: 200m
+                  limits:
+                    memory: 1Gi
+                    cpu: "1"
+                readinessProbe:
+                  tcpSocket:
+                    port: 9463
+                  initialDelaySeconds: 60
+                  periodSeconds: 15
+                  failureThreshold: 20
+
+- name: Create ODM Decision Runner Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: odm-dr-svc
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: odm
+          component: decisionrunner
+      spec:
+        selector:
+          app: odm
+          component: decisionrunner
+        ports:
+          - port: 9070
+            targetPort: 9070
+            name: http
+          - port: 9463
+            targetPort: 9463
+            name: https
+
 # ── Wait ──────────────────────────────────────────────────────────────────────
 
-- name: Wait for ODM deployment
+- name: Wait for ODM Decision Center
   ansible.builtin.shell: >
-    oc rollout status deployment/odm
+    oc rollout status deployment/odm-decisioncenter
+    -n {{ baw_namespace }} --timeout={{ pod_ready_timeout }}s
+  changed_when: false
+
+- name: Wait for ODM Decision Server Runtime
+  ansible.builtin.shell: >
+    oc rollout status deployment/odm-decisionserverruntime
     -n {{ baw_namespace }} --timeout={{ pod_ready_timeout }}s
   changed_when: false
 
 - name: ODM summary
   ansible.builtin.debug:
     msg:
-      - "ODM ready at https://odm-svc.{{ baw_namespace }}.svc.cluster.local:9443"
-      - "ODM URL : https://{{ baw_hostname }}/res/"
+      - "ODM Decision Center  : https://odm-dc-svc.{{ baw_namespace }}.svc.cluster.local:9453"
+      - "ODM Decision Runtime : https://odm-dsr-svc.{{ baw_namespace }}.svc.cluster.local:9443"
+      - "ODM Decision Center URL : https://{{ baw_hostname }}/odm/decisioncenter"

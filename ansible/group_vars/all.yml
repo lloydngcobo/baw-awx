@@ -41,7 +41,11 @@ ums_image:        "cp.icr.io/cp/cp4a/ums/ums:25.0.1"
 bastudio_image:   "cp.icr.io/cp/cp4a/bas/workflow-authoring:25.0.1"
 baw_runtime_image: "cp.icr.io/cp/cp4a/baw/workflow-server:25.0.1"
 ae_image:         "cp.icr.io/cp/cp4a/aae/solution-server:25.0.1"
-odm_image:        "cp.icr.io/cp/cp4a/odm/odm:25.0.1"
+# ODM — four separate component images (ref: baw-microshift-rhel/install/odm)
+odm_dc_image:     "cp.icr.io/cp/cp4a/odm/odm-decisioncenter:9.0.0.0"
+odm_dsc_image:    "cp.icr.io/cp/cp4a/odm/odm-decisionserverconsole:9.0.0.0"
+odm_dsr_image:    "cp.icr.io/cp/cp4a/odm/odm-decisionserverruntime:9.0.0.0"
+odm_dr_image:     "cp.icr.io/cp/cp4a/odm/odm-decisionrunner:9.0.0.0"
 
 # --- License ---
 # Options: FNCM.PVUNonProd, FNCM.PVUProd, FNCM.UVU, FNCM.CU
@@ -110,6 +114,11 @@ baw_pdw_db_pass: "Password1"
 aae_db_name:  "ae_db"
 aae_db_user:  "ae_user"
 aae_db_pass:  "Password1"
+
+# ODM database (used only when deploy_odm: true)
+odm_db_name:  "odm_db"
+odm_db_user:  "odm_user"
+odm_db_pass:  "Password1"
 
 # =============================================================================
 # TLS / Certificates
