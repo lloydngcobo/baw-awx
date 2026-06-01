@@ -41,6 +41,7 @@ ums_image:        "cp.icr.io/cp/cp4a/ums/ums:25.0.1"
 bastudio_image:   "cp.icr.io/cp/cp4a/bas/workflow-authoring:25.0.1"
 baw_runtime_image: "cp.icr.io/cp/cp4a/baw/workflow-server:25.0.1"
 ae_image:         "cp.icr.io/cp/cp4a/aae/solution-server:25.0.1"
+ae_keytool_image: "cp.icr.io/cp/cp4a/aae/dba-keytool-initcontainer:25.0.1"
 # ODM — four separate component images (ref: baw-microshift-rhel/install/odm)
 odm_dc_image:     "cp.icr.io/cp/cp4a/odm/odm-decisioncenter:9.0.0.0"
 odm_dsc_image:    "cp.icr.io/cp/cp4a/odm/odm-decisionserverconsole:9.0.0.0"

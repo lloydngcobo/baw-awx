@@ -2,113 +2,286 @@
 # Role: app_engine
 # Deploys IBM App Engine (Playback Server / solution-server) 25.0.1
 # Node.js application on port 3001 (HTTPS).
-# Enables Process Designer "Play" button for interactive process testing.
+# Faithful port of baw-microshift-rhel/install/ae/* with homelab substitutions:
+#   baw-microshift.dev.internal -> {{ baw_hostname }}
+#   ums-sso-service             -> ums-svc
+#   root-ca-volume ConfigMap    -> shared-ssl-config
+#   keypair                     -> baw-ssl-certs (tls.crt + tls.key)
 # Only runs when deploy_app_engine: true.
-# Requires: CPE, UMS, BAStudio running. Uses aae_db database.
 
-# ── Secrets ───────────────────────────────────────────────────────────────────
+# ── Main env-var ConfigMap (baw-ae-configuration) ─────────────────────────────
 
-- name: Create App Engine credentials Secret
-  kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: v1
-      kind: Secret
-      metadata:
-        name: ae-secret
-        namespace: "{{ baw_namespace }}"
-        labels:
-          app: app-engine
-      stringData:
-        AE_DB_USER:         "{{ aae_db_user }}"
-        AE_DB_PASS:         "{{ aae_db_pass }}"
-        OIDC_CLIENT_SECRET: "{{ ums_admin_password }}"
-        SESSION_KEY:        "{{ keystore_password }}"
-  no_log: true
-
-# ── common-config.yml ConfigMap ────────────────────────────────────────────────
-# Node.js solution-server reads all config from /etc/nodejs/common-config.yml
-
-- name: Create App Engine common-config ConfigMap
+- name: Create App Engine configuration ConfigMap
   kubernetes.core.k8s:
     state: present
     definition:
       apiVersion: v1
       kind: ConfigMap
       metadata:
-        name: ae-common-config
+        name: baw-ae-configuration
         namespace: "{{ baw_namespace }}"
         labels:
           app: app-engine
       data:
-        common-config.yml: |
-          # App Engine (solution-server) configuration
-          # Ref: baw-microshift-rhel/install/ae/ae-configmap.yaml
+        MODEL_DIRECTORY: ""
+        CSP_ENABLED: "false"
+        SERVER_ENV_TYPE: "development"
+        CSP_WHITELIST: ""
+        CSP_FRAME_ANCESTOR: ""
+        STATIC_ASSET_MAXAGE: "2592000"
+        HSTS_MAXAGE: "2592000"
 
-          # Server
-          PORT: 3000
-          HOST: "0.0.0.0"
-          PUBLIC_HOSTNAME: "https://{{ baw_hostname }}"
-          SECURE_CONTEXT: "/playback"
-          UV_THREADPOOL_SIZE: "4"
+        # UMS OIDC
+        OPENID_ISSUER: "https://{{ baw_hostname }}/oidc/endpoint/ums"
+        OPENID_AUTHORIZATION_URL: "https://{{ baw_hostname }}/oidc/endpoint/ums/authorize"
+        OPENID_TOKEN_URL: "https://ums-svc.{{ baw_namespace }}.svc.cluster.local:9443/oidc/endpoint/ums/token"
+        OPENID_INTROSPECTION_URL: "https://ums-svc.{{ baw_namespace }}.svc.cluster.local:9443/oidc/endpoint/ums/introspect"
+        OPENID_TOKEN_REFRESH_URL: "https://ums-svc.{{ baw_namespace }}.svc.cluster.local:9443/oidc/endpoint/ums/token"
+        OPENID_LOGOUT_URL: "https://{{ baw_hostname }}/oidc/endpoint/ums/logout"
+        OPENID_JWK_URL: "https://ums-svc.{{ baw_namespace }}.svc.cluster.local:9443/oidc/endpoint/ums/jwk"
+        OPENID_SCOPE: "openid profile email"
+        OPENID_FUNCTION_USER_SCOPE: "openid profile email"
 
-          # Licensing
-          LICENSE_TYPE: "non-production"
+        # UMS team server
+        TEAM_SERVER_GRAPH_QL_URL: "https://ums-svc.{{ baw_namespace }}.svc.cluster.local:9443/teamserver/rest/graphql"
 
-          # OIDC (UMS)
-          OIDC_ISSUER: "https://{{ baw_hostname }}/oidc/endpoint/ums"
-          OIDC_ISSUER_SERVICE: "https://ums-svc.{{ baw_namespace }}.svc.cluster.local:9443/oidc/endpoint/ums"
-          OIDC_CLIENT_ID: "baw-ae"
-          OIDC_CALLBACK: "https://{{ baw_hostname }}/playback/callback"
-          OIDC_LOGOUT_REDIRECT: "https://{{ baw_hostname }}/playback"
-          OIDC_DISABLE_PKCE: "false"
+        # Session
+        SESSION_DURATION: "1800000"
+        SESSION_RESAVE: "false"
+        SESSION_ROLLING: "true"
+        SESSION_SAVE_UNINITIALEZED: "false"
+        SESSION_USE_EXTERNAL_STORE: "false"
+        SESSION_CHECK_PERIOD: "3600000"
+        SESSION_MAX: "10000"
 
-          # Database (PostgreSQL)
-          DB_TYPE: "postgresql"
-          DB_HOST: "{{ postgres_host }}"
-          DB_PORT: "{{ postgres_port }}"
-          DB_NAME: "{{ aae_db_name }}"
-          DB_SSL: "false"
-          DB_SCHEMA: "{{ aae_db_user }}"
+        # Redis (disabled)
+        REDIS_HOST: "localhost"
+        REDIS_PORT: "6379"
+        REDIS_TTL: "1800"
+        REDIS_TLS: "false"
+        REDIS_USER: ""
 
-          # BAStudio connection
-          DESIGNER_ENABLED: "true"
-          DESIGNER_SERVER_URL: "https://bastudio-svc.{{ baw_namespace }}.svc.cluster.local:9443/bas"
+        # Max ages
+        CSRF_COOKIE_MAXAGE: "3600000"
+        AUTHENTICATION_COOKIE_MAXAGE: "900000"
 
-          # Session
-          SESSION_DURATION: "1800000"
-          MAX_SESSIONS: "10000"
-          SESSION_STORE: "memory"
+        # Resource Registry (not deployed)
+        RESOURCE_REGISTRY_HOSTNAME: ""
+        RESOURCE_REGISTRY_PORT: "2379"
+        RESOURCE_REGISTRY_URL: "/v3"
+        LRU_CACHE_MAX_SIZE_RR: "1000"
+        LRU_CACHE_MAX_AGE_TEAMS: "600000"
 
-          # Logging — IBM DBA pino logger requires uppercase level
-          LOG_LEVEL: "INFO"
+        # Database (PostgreSQL)
+        AE_DATABASE_NAME: "{{ aae_db_name }}"
+        AE_DATABASE_HOST: "{{ postgres_host }}"
+        AE_DATABASE_PORT: "{{ postgres_port }}"
+        AE_DATABASE_ALT_HOST: ""
+        AE_DATABASE_ALT_PORT: ""
+        AE_DATABASE_TYPE: "postgresql"
+        AE_DATABASE_PROTOCOL: "TCPIP"
+        AE_DATABASE_CURRENT_SCHEMA: "{{ aae_db_user }}"
+        AE_DATABASE_POOL_SIZE_INIT: "1"
+        AE_DATABASE_ENABLE_SSL: "false"
+        AE_DATABASE_ENABLE_SSL_CLIENT_CERTIFICATE_AUTHENTICATION: "false"
 
-          # Security
-          CSP_DISABLED: "true"
-          RESTRICT_MODE: "false"
+        # LRU cache for DB
+        UV_THREADPOOL_SIZE: "40"
+        LRU_CACHE_MAX_SIZE_DB: "1000"
+        LRU_CACHE_MAX_AGE_DB: "600000"
 
-          # Timezone
-          TZ: "{{ timezone }}"
+        # BAStudio (Playback Server mode)
+        CONFIGURATOR_TARGET_ORIGIN: "https://{{ baw_hostname }}"
+        DESIGNER_SERVER: "true"
+        BIZ_ORCH_SERVER_ORIGIN: "https://{{ baw_hostname }}"
+        BIZ_ORCH_SERVER_ORIGIN_INTERNAL: "https://bastudio-svc.{{ baw_namespace }}.svc.cluster.local:9443"
 
-# ── Storage ───────────────────────────────────────────────────────────────────
+        # Public endpoint
+        PUBLIC_HOSTNAME: "{{ baw_hostname }}"
+        PUBLIC_HTTPS_PORT: "443"
+        INTERNAL_HOSTNAME: "baw-ae-service.{{ baw_namespace }}.svc.cluster.local"
+        INTERNAL_HTTPS_PORT: "443"
 
-- name: Create App Engine logs PVC
+        # OIDC callback
+        CONTEXT_ROOT_PREFIX: ""
+        SESSION_COOKIE_PATH: "/"
+        OPENID_CALLBACK_URL: "https://{{ baw_hostname }}/auth/openidconnect/callback"
+
+        # Misc
+        PURGE_STALE_APPS_INTERVAL: "86400000"
+        APPS_THRESHOLD: "100"
+        STALE_THRESHOLD: "172800000"
+        AUTOMATION_SERVICES_THRESHOLD: "100"
+        AUTOMATION_SERVICES_STALE_THRESHOLD: "172800000"
+        AE_SERVER_IDENTIFIER: ""
+        AUTO_SERVICE_ONLY_MODE: "false"
+        DEPLOYMENT_PURPOSE: ""
+        ANALYTICS_KEY: ""
+        ANALYTICS_URL: ""
+        ACCOUNT_ID: ""
+        ACCOUNT_PLAN: ""
+        ACCOUNT_COUNTRYCODE: ""
+        CONNECTION_TIMEOUT: "360000"
+        HTTP_KEEP_ALIVE_TIMEOUT: "60000"
+        CPE_ENABLE: "false"
+        LICENSE_TYPE: "non-production"
+        ENABLE_FILE_LOG: ""
+        LOG_FILE_SIZE: "20M"
+        LOG_ROTATE_SIZE: "5"
+        RESTRICTED_MODE: "false"
+        PUBLIC_APP_CONTEXT: "/public-app"
+
+# ── /etc/nodejs file config (baw-ae-file-config) ──────────────────────────────
+# This is the file the Node.js pino logger reads. NODE_LOG_LEVEL is REQUIRED —
+# without it pino crashes with "default level: undefined".
+
+- name: Create App Engine file-config ConfigMap (/etc/nodejs)
   kubernetes.core.k8s:
     state: present
     definition:
       apiVersion: v1
-      kind: PersistentVolumeClaim
+      kind: ConfigMap
       metadata:
-        name: ae-logs-pvc
+        name: baw-ae-file-config
         namespace: "{{ baw_namespace }}"
         labels:
           app: app-engine
-      spec:
-        accessModes: [ReadWriteMany]
-        resources:
-          requests:
-            storage: 5Gi
-        storageClassName: "{{ storage_class_name }}"
+      data:
+        common-config.yml: |-
+          NODE_LOG_LEVEL: audit
+          BROWSER_LOG_LEVEL: 2
+          AE_DATABASE_POOL_SIZE_MAX: 100
+          AE_SERVER_LOCALE: en
+          MAX_REQUEST_BODY_SIZE: 2000
+
+# ── Log rotation config (empty) ───────────────────────────────────────────────
+
+- name: Create App Engine logrotate ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: baw-ae-logrotate
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: app-engine
+      data:
+        filebeat.conf: ""
+        logging.conf: ""
+
+# ── Startup scripts (/shared/scripts) ─────────────────────────────────────────
+
+- name: Create App Engine scripts ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: baw-ae-scripts
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: app-engine
+      data:
+        merge_dot_env.sh: |+
+          #!/bin/bash
+          if [[ -e /usr/home/solution-server/secrets.env ]]; then
+            echo "Merge dot env"
+            cat /usr/home/solution-server/secrets.env >> /usr/home/solution-server/.env
+          fi
+          mkdir -p $LOG_FILE_PATH
+        update_swidtag.sh: |+
+          #!/bin/bash
+          echo "Application Engine runs on mode $LICENSE_TYPE"
+
+# ── TLS keypair secret (reuse baw-ssl-certs tls.crt + tls.key) ─────────────────
+
+- name: Read shared TLS cert + key for App Engine keypair
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: baw-ssl-certs
+    namespace: "{{ baw_namespace }}"
+  register: _baw_certs
+
+- name: Create App Engine TLS keypair Secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: baw-app-engine-tls-secret
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: app-engine
+      type: kubernetes.io/tls
+      data:
+        tls.crt: "{{ _baw_certs.resources[0].data['tls.crt'] }}"
+        tls.key: "{{ _baw_certs.resources[0].data['tls.key'] }}"
+  no_log: true
+
+# ── Admin secret (init containers, OIDC) ──────────────────────────────────────
+
+- name: Create App Engine admin Secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: baw-app-engine-admin-secret
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: app-engine
+      type: Opaque
+      stringData:
+        SSL_KEYSTORE_PASSWORD: "{{ keystore_password }}"
+        AE_DATABASE_USER:      "{{ aae_db_user }}"
+        AE_DATABASE_PWD:       "{{ aae_db_pass }}"
+        OPENID_CLIENT_ID:      "baw-ae"
+        OPENID_CLIENT_SECRET:  "{{ ums_admin_password }}"
+        FUNCTION_ADMIN_USER:   "{{ ums_admin_user }}"
+        FUNCTION_ADMIN_PWD:    "{{ ums_admin_password }}"
+        adminUser:             "{{ ums_admin_user }}"
+        adminPassword:         "{{ ums_admin_password }}"
+  no_log: true
+
+# ── Credential secret (secrets.env merged into .env) ──────────────────────────
+
+- name: Create App Engine credential Secret (secrets.env)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: baw-ae-credential
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: app-engine
+      type: Opaque
+      stringData:
+        secrets.env: |
+          AE_DATABASE_USER={{ aae_db_user }}
+          AE_DATABASE_PWD={{ aae_db_pass }}
+          OPENID_CLIENT_ID=baw-ae
+          OPENID_CLIENT_SECRET={{ ums_admin_password }}
+          SESSION_SECRET=baw-ae-session-secret-change-me-32c
+          SESSION_COOKIE_NAME=AESession
+          REDIS_PASSWORD=
+          FUNCTION_ADMIN_USER={{ ums_admin_user }}
+          FUNCTION_ADMIN_PWD={{ ums_admin_password }}
+          TEMPORARY_FILE_ENCRYPTION_PASSWORD={{ keystore_password }}encrypt
+          SSL_KEYSTORE_PASSWORD={{ keystore_password }}
+          RESOURCE_REGISTRY_AUTH_PASSWORD=
+          RESOURCE_REGISTRY_AUTH_USERNAME=
+          AUTOMATION_USER={{ ums_admin_user }}
+          AUTOMATION_PWD={{ ums_admin_password }}
+          APICATALOG_ENABLED=false
+  no_log: true
 
 # ── Deployment ────────────────────────────────────────────────────────────────
 
@@ -136,85 +309,216 @@
           spec:
             imagePullSecrets:
               - name: ibm-entitlement-key
+            automountServiceAccountToken: false
             securityContext:
+              runAsNonRoot: true
               runAsUser: 1000140000
               fsGroup: 1000140000
-            containers:
-              - name: app-engine
+            initContainers:
+              # Init 1: Generate TLS keystore from keypair
+              - name: ssl-init-container
+                image: "{{ ae_keytool_image }}"
+                imagePullPolicy: IfNotPresent
+                securityContext:
+                  privileged: false
+                  readOnlyRootFilesystem: true
+                  allowPrivilegeEscalation: false
+                  runAsNonRoot: true
+                  capabilities:
+                    drop: [ALL]
+                env:
+                  - name: KEYTOOL_ACTION
+                    value: "GENERATE-BOTH"
+                  - name: CREATE_KEYPAIR
+                    value: "false"
+                  - name: STORE_TYPES
+                    value: "P12"
+                volumeMounts:
+                  - name: temp-folder
+                    mountPath: /tmp
+                  - name: tls-stores
+                    mountPath: /shared/tls
+                  - name: trust-tls-volume
+                    mountPath: /shared/resources/cert-trusted
+                  - name: keypair-secret
+                    mountPath: /shared/resources/keypair
+                  - name: credentials-env
+                    mountPath: /credentials
+              # Init 2: Seed .env and facility store
+              - name: init-config
                 image: "{{ ae_image }}"
                 imagePullPolicy: IfNotPresent
-                ports:
-                  - containerPort: 3001
-                    name: https
+                securityContext:
+                  privileged: false
+                  readOnlyRootFilesystem: true
+                  allowPrivilegeEscalation: false
+                  runAsNonRoot: true
+                  capabilities:
+                    drop: [ALL]
+                command:
+                  - /bin/bash
+                  - -ec
+                  - |
+                    cp /usr/home/solution-server/.env /config/
+                    rm -rf /facilitystore/collectd
+                    rm -rf /facilitystore/ext
+                    cp -r /etc/collectd /facilitystore/
+                    cp -r /etc/supervisor/ext /facilitystore/
+                volumeMounts:
+                  - name: config-folder
+                    mountPath: /config
+                  - name: facility-store
+                    mountPath: /facilitystore
+            containers:
+              - name: app-engine-work-pod
+                image: "{{ ae_image }}"
+                imagePullPolicy: IfNotPresent
+                securityContext:
+                  privileged: false
+                  readOnlyRootFilesystem: true
+                  allowPrivilegeEscalation: false
+                  runAsNonRoot: true
+                  capabilities:
+                    drop: [ALL]
                 env:
-                  - name: DB_USER
-                    valueFrom:
-                      secretKeyRef:
-                        name: ae-secret
-                        key: AE_DB_USER
-                  - name: DB_PASSWORD
-                    valueFrom:
-                      secretKeyRef:
-                        name: ae-secret
-                        key: AE_DB_PASS
-                  - name: OIDC_CLIENT_SECRET
-                    valueFrom:
-                      secretKeyRef:
-                        name: ae-secret
-                        key: OIDC_CLIENT_SECRET
-                  - name: SESSION_KEY
-                    valueFrom:
-                      secretKeyRef:
-                        name: ae-secret
-                        key: SESSION_KEY
-                  - name: POD_NAME
+                  - name: TEMPORARY_FILE_DIRECTORY
+                    value: "/shared/ae-shared-file"
+                  - name: CORS_ALLOWED_ORIGINS
+                    value: "https://{{ baw_hostname }}"
+                  - name: PODNAME
                     valueFrom:
                       fieldRef:
                         fieldPath: metadata.name
-                resources:
-                  requests:
-                    memory: 512Mi
-                    cpu: 500m
-                  limits:
-                    memory: 2Gi
-                    cpu: "2"
+                  - name: LOG_FILE_PATH
+                    value: /logs/application/AE/$(PODNAME)/
+                  - name: ENABLE_AUDIT_LOGGING
+                    value: "false"
+                envFrom:
+                  - configMapRef:
+                      name: baw-ae-configuration
+                ports:
+                  - name: https
+                    containerPort: 3001
+                    protocol: TCP
                 livenessProbe:
                   httpGet:
                     path: /k8s/liveliness
-                    port: 3001
+                    port: https
                     scheme: HTTPS
                   initialDelaySeconds: 60
                   periodSeconds: 10
-                  failureThreshold: 10
+                  timeoutSeconds: 180
+                  successThreshold: 1
+                  failureThreshold: 5
                 readinessProbe:
                   httpGet:
                     path: /k8s/readiness
-                    port: 3001
+                    port: https
                     scheme: HTTPS
                   initialDelaySeconds: 10
                   periodSeconds: 10
-                  failureThreshold: 20
+                  timeoutSeconds: 180
+                  successThreshold: 1
+                  failureThreshold: 5
+                resources:
+                  requests:
+                    cpu: 500m
+                    memory: 512Mi
+                  limits:
+                    cpu: "2"
+                    memory: 1024Mi
                 volumeMounts:
-                  - name: common-config
+                  - name: system-log
+                    mountPath: /logs/system
+                  - name: facility-store
+                    mountPath: /etc/collectd
+                    subPath: collectd
+                  - name: facility-store
+                    mountPath: /etc/supervisor/ext
+                    subPath: ext
+                  - name: config-folder
+                    mountPath: /usr/home/solution-server/.env
+                    subPath: .env
+                  - name: temp-folder
+                    mountPath: /tmp
+                  - name: tls-stores
+                    mountPath: /shared/tls
+                  - name: models
+                    mountPath: /usr/home/solution-server/models
+                  - name: log-setting
                     mountPath: /etc/nodejs
-                  - name: logs
-                    mountPath: /opt/ibm/ae/logs
-                  - name: tls
-                    mountPath: /etc/ssl/certs/ca-bundle.crt
-                    subPath: ca.crt
+                  - name: ae-file-pv
+                    mountPath: /shared/ae-shared-file
+                  - name: credentials
+                    mountPath: /usr/home/solution-server/secrets.env
+                    subPath: secrets.env
+                  - name: plugin-script
+                    mountPath: /shared/scripts
+                  - name: log-rotate-config
+                    mountPath: /etc/supervisor/ext/filebeat.conf
+                    subPath: filebeat.conf
+                  - name: log-rotate-config
+                    mountPath: /etc/supervisor/ext/logging.conf
+                    subPath: logging.conf
+                  - name: ae-log-pv
+                    mountPath: /logs/application
             volumes:
-              - name: common-config
+              - name: temp-folder
+                emptyDir: {}
+              - name: config-folder
+                emptyDir: {}
+              - name: models
+                emptyDir: {}
+              - name: tls-stores
+                emptyDir: {}
+              - name: system-log
+                emptyDir: {}
+              - name: ae-file-pv
+                emptyDir: {}
+              - name: ae-log-pv
+                emptyDir: {}
+              - name: facility-store
+                emptyDir: {}
+              - name: keypair-secret
+                secret:
+                  secretName: baw-app-engine-tls-secret
+              - name: trust-tls-volume
+                projected:
+                  defaultMode: 0770
+                  sources:
+                    - configMap:
+                        name: shared-ssl-config
+                        items:
+                          - key: ca.crt
+                            path: ca.crt
+              - name: log-rotate-config
                 configMap:
-                  name: ae-common-config
-              - name: logs
-                persistentVolumeClaim:
-                  claimName: ae-logs-pvc
-              - name: tls
+                  name: baw-ae-logrotate
+              - name: log-setting
                 configMap:
-                  name: shared-ssl-config
-                  items:
-                    - key: ca.crt
-                      path: ca.crt
+                  name: baw-ae-file-config
+              - name: plugin-script
+                configMap:
+                  defaultMode: 0551
+                  name: baw-ae-scripts
+              - name: credentials
+                secret:
+                  defaultMode: 0551
+                  secretName: baw-ae-credential
+              - name: credentials-env
+                projected:
+                  sources:
+                    - secret:
+                        name: baw-app-engine-admin-secret
+                        items:
+                          - key: SSL_KEYSTORE_PASSWORD
+                            path: KEYSTORE_PASSWORD
+                          - key: SSL_KEYSTORE_PASSWORD
+                            path: TRUST_STORE_PWD
+                          - key: AE_DATABASE_USER
+                            path: DATABASE_USER
+                          - key: AE_DATABASE_PWD
+                            path: DATABASE_PWD
 
 # ── Service ───────────────────────────────────────────────────────────────────
 
@@ -225,7 +529,7 @@
       apiVersion: v1
       kind: Service
       metadata:
-        name: app-engine-svc
+        name: baw-ae-service
         namespace: "{{ baw_namespace }}"
         labels:
           app: app-engine
@@ -233,9 +537,11 @@
         selector:
           app: app-engine
         ports:
-          - port: 3001
+          - name: https
+            protocol: TCP
+            port: 443
             targetPort: 3001
-            name: https
+        type: ClusterIP
 
 # ── Wait ──────────────────────────────────────────────────────────────────────
 
@@ -249,5 +555,5 @@
 - name: App Engine summary
   ansible.builtin.debug:
     msg:
-      - "App Engine ready at https://app-engine-svc.{{ baw_namespace }}.svc.cluster.local:3001"
+      - "App Engine ready at https://baw-ae-service.{{ baw_namespace }}.svc.cluster.local"
       - "App Engine URL : https://{{ baw_hostname }}/playback/"
