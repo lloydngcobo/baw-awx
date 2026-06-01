@@ -1336,6 +1336,199 @@
     -n {{ baw_namespace }} --timeout={{ bastudio_job_timeout }}s
   changed_when: false
 
+- name: Create case-init PersistentVolumeClaim
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: bastudio-case-init
+        namespace: "{{ baw_namespace }}"
+      spec:
+        accessModes:
+          - ReadWriteMany
+        storageClassName: "{{ storage_class_name }}"
+        resources:
+          requests:
+            storage: 5Gi
+
+- name: Create BAStudio case-init Job
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: job-bastudio-case-init
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: job-bastudio-case-init
+      spec:
+        backoffLimit: 30
+        completions: 1
+        parallelism: 1
+        template:
+          metadata:
+            labels:
+              app: job-bastudio-case-init
+          spec:
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+            restartPolicy: OnFailure
+            terminationGracePeriodSeconds: 30
+            serviceAccountName: default
+            containers:
+              - name: bastudio-case-init-job
+                image: 'cp.icr.io/cp/cp4a/baw/workflow-server-case-initialization:25.0.1'
+                imagePullPolicy: IfNotPresent
+                terminationMessagePolicy: File
+                terminationMessagePath: /dev/termination-log
+                securityContext:
+                  capabilities:
+                    drop:
+                      - ALL
+                  privileged: false
+                  runAsUser: 1000140000
+                  runAsNonRoot: true
+                  readOnlyRootFilesystem: false
+                  allowPrivilegeEscalation: false
+                  seccompProfile:
+                    type: RuntimeDefault
+                command:
+                  - sh
+                  - '-c'
+                args:
+                  - if [ -f /temp/jms-client.xml ]; then cp /temp/jms-client.xml /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/jms-client.xml; else echo "jms-client.xml not provided; continuing without it"; fi; /opt/ibm/icm/case-init-script.sh
+                env:
+                  - name: CREDENTIAL_FOLDER
+                    value: /credentials/
+                  - name: CPE_URL
+                    value: 'https://cpe-svc.{{ baw_namespace }}.svc.cluster.local:9443/wsi/FNCEWS40MTOM'
+                  - name: CPE_STATEFUL_URL
+                    value: 'https://cpe-svc.{{ baw_namespace }}.svc.cluster.local:9443/wsi/FNCEWS40MTOM'
+                  - name: CPE_GATEWAY_URL
+                    value: 'https://cpe-svc.{{ baw_namespace }}.svc.cluster.local:9443/WSCPEService/WSCPEServiceSoapService'
+                  - name: DOS_OBJECTSTORE_NAME
+                    value: DOS
+                  - name: TOS_OBJECTSTORE_NAME
+                    value: "TOS"
+                  - name: DEFAULT_TOS_OBJECTSTORE_NAME
+                    value: "TOS"
+                  - name: CONN_POINT_NAME
+                    value: "tos-cp"
+                  - name: NAV_DESKTOP_ID
+                    value: "{{ baw_subdomain }}"
+                  - name: DOMAIN_NAME
+                    value: P8Domain
+                  - name: DISABLE_BASIC_AUTH
+                    value: 'False'
+                  - name: NAVIGATOR_URL
+                    value: 'https://icn-svc.{{ baw_namespace }}.svc.cluster.local:9443/navigator'
+                  - name: CASEMANAGER_URL
+                    value: 'https://bastudio-svc.{{ baw_namespace }}.svc.cluster.local:9443/bas/CaseManager'
+                  - name: BAW_HOSTNAME
+                    value: "{{ baw_hostname }}"
+                  - name: BAW_PORT
+                    value: "443"
+                  - name: BAW_SERVICE_NAME
+                    value: bastudio-svc.{{ baw_namespace }}.svc.cluster.local
+                  - name: BAW_SERVICE_PORT
+                    value: '9443'
+                  - name: ICN_HOSTNAME
+                    value: icn-svc.{{ baw_namespace }}.svc.cluster.local
+                  - name: ICN_PORT
+                    value: "443"
+                  - name: SSL_CA_CERT_PATH
+                    value: /shared/resources/cert-trusted/ca.crt
+                  - name: IS_SECURE
+                    value: T
+                  - name: TARGET_ENV_NAME
+                    value: dev_env_connection_definition
+                  - name: ENV_TYPE
+                    value: DEV
+                  - name: ADD_OS_ADMINS_IN_DEFAULT_PA
+                    value: 'true'
+                  - name: JMSTopicConnectionFactoryName
+                    value: tw.jms.caseMessageConnectionFactory
+                  - name: JMSTopicName
+                    value: caseTopic
+                  - name: INDEX_NUMBER_OF_SHARDS
+                    value: '3'
+                  - name: INDEX_NUMBER_OF_REPLICAS
+                    value: '1'
+                  - name: enableContainerCHEmitter
+                    value: 'false'
+                  - name: CASE_HISTORY_STORE_SCHEMA_NAME
+                    value: CHSCHEMA
+                  - name: CASE_HISTORY_STORE_CPE_DATASOURCE_NAME
+                    value: FNTOSDS
+                  - name: CASE_HISTORY_STORE_CPE_XA_DATASOURCE_NAME
+                    value: FNTOSDSXA
+                  - name: BAW_CONTEXT_ROOT_PREFIX
+                    value: /bas
+                resources:
+                  limits:
+                    cpu: '1'
+                    ephemeral-storage: 2Gi
+                    memory: 512Mi
+                  requests:
+                    cpu: 100m
+                    ephemeral-storage: 1Gi
+                    memory: 128Mi
+                volumeMounts:
+                  - name: com-folder
+                    mountPath: /com
+                  - name: case-init-volume
+                    mountPath: /opt/ibm/icm/shared
+                  - name: icn-config-overrides
+                    mountPath: /opt/ibm/icm/shared/configDropins/overrides
+                    subPath: shared/configDropins/overrides
+                  - name: icn-config-overrides
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides
+                    subPath: defaultServer/configDropins/overrides
+                  - name: icn-config-overrides
+                    mountPath: /logs/application
+                    subPath: logs/application
+                  - name: ca-tls-volume
+                    mountPath: /shared/resources/cert-trusted
+                  - name: credentials-env
+                    mountPath: /credentials
+            volumes:
+              - name: com-folder
+                emptyDir: {}
+              - name: case-init-volume
+                persistentVolumeClaim:
+                  claimName: bastudio-case-init
+              - name: icn-config-overrides
+                persistentVolumeClaim:
+                  claimName: bastudio-pvc
+              - name: credentials-env
+                secret:
+                  secretName: cpe-secret
+                  defaultMode: 420
+                  items:
+                    - key: CPE_ADMIN_USER
+                      path: CPE_USERNAME
+                    - key: CPE_ADMIN_PASSWORD
+                      path: CPE_PASSWORD
+                    - key: CPE_ADMIN_USER
+                      path: NAVIGATOR_USERNAME
+                    - key: CPE_ADMIN_PASSWORD
+                      path: NAVIGATOR_PASSWORD
+              - name: ca-tls-volume
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+
+- name: Wait for case-init job to complete
+  ansible.builtin.shell: >
+    kubectl wait --for=condition=complete job/job-bastudio-case-init
+    -n {{ baw_namespace }} --timeout={{ bastudio_job_timeout }}s
+  changed_when: false
+
 - name: BAStudio summary
   ansible.builtin.debug:
     msg:
