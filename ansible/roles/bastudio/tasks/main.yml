@@ -959,7 +959,8 @@
     -c "INSERT INTO {{ bas_db_user }}.lsw_system (propkey,propvalue) VALUES ('IsRepository','true')
         ON CONFLICT (propkey) DO UPDATE SET propvalue='true';"
   register: _bas_db_fixups
-  changed_when: true
+  changed_when: _bas_db_fixups.rc == 0
+  ignore_errors: true
   no_log: true
 
 # ── BAStudio Deployment ───────────────────────────────────────────────────────
