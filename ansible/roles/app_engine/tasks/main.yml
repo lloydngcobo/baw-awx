@@ -283,6 +283,309 @@
           APICATALOG_ENABLED=false
   no_log: true
 
+# ── Init credential secret (slim — used by db-init import-toolkits) ────────────
+
+- name: Create App Engine init credential Secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: baw-ae-credential-init
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: app-engine
+      type: Opaque
+      stringData:
+        secrets.env: |
+          AE_DATABASE_USER={{ aae_db_user }}
+          AE_DATABASE_PWD={{ aae_db_pass }}
+          FUNCTION_ADMIN_USER={{ ums_admin_user }}
+          FUNCTION_ADMIN_PWD={{ ums_admin_password }}
+          SSL_KEYSTORE_PASSWORD={{ keystore_password }}
+          APICATALOG_ENABLED=false
+  no_log: true
+
+# ── DB init Job (creates AE schema + imports base toolkits) ───────────────────
+# Runs ONCE before the deployment. 3 init containers (keytool, Java DB schema,
+# .env seed) + import-toolkits main container. k8s Jobs are immutable, so check
+# completion first and skip if already done.
+
+- name: Check if App Engine db-init Job already completed
+  ansible.builtin.shell: >
+    oc get job baw-ae-db-job -n {{ baw_namespace }}
+    -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}'
+    2>/dev/null || echo ""
+  register: _ae_dbinit_done
+  changed_when: false
+  failed_when: false
+
+- name: Create App Engine db-init Job
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: baw-ae-db-job
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: app-engine
+      spec:
+        backoffLimit: 5
+        template:
+          metadata:
+            name: solution-server-db-init
+            labels:
+              app: app-engine
+          spec:
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+            automountServiceAccountToken: false
+            restartPolicy: OnFailure
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 1000140000
+              fsGroup: 1000140000
+            initContainers:
+              # Step 1: TLS keystore
+              - name: ssl-init-container
+                image: "{{ ae_keytool_image }}"
+                imagePullPolicy: IfNotPresent
+                securityContext:
+                  privileged: false
+                  readOnlyRootFilesystem: true
+                  allowPrivilegeEscalation: false
+                  runAsNonRoot: true
+                  capabilities:
+                    drop: [ALL]
+                env:
+                  - name: KEYTOOL_ACTION
+                    value: "GENERATE-BOTH"
+                  - name: CREATE_KEYPAIR
+                    value: "false"
+                  - name: STORE_TYPES
+                    value: "P12"
+                volumeMounts:
+                  - name: temp-folder
+                    mountPath: /tmp
+                  - name: tls-stores
+                    mountPath: /shared/tls
+                  - name: trust-tls-volume
+                    mountPath: /shared/resources/cert-trusted
+                  - name: keypair-secret
+                    mountPath: /shared/resources/keypair
+                  - name: credentials-env
+                    mountPath: /credentials
+              # Step 2: Java DB schema initializer
+              - name: ae-db-init
+                image: "{{ ae_dbinit_image }}"
+                imagePullPolicy: IfNotPresent
+                securityContext:
+                  privileged: false
+                  readOnlyRootFilesystem: true
+                  allowPrivilegeEscalation: false
+                  runAsNonRoot: true
+                  capabilities:
+                    drop: [ALL]
+                env:
+                  - name: OPENJ9_JAVA_OPTIONS
+                    value: "-Dsemeru.fips=false -Djavax.net.ssl.trustStoreType=PKCS12"
+                  - name: AE_NODE_ENV
+                    value: "production"
+                  - name: DESIGNER_SERVER
+                    value: "true"
+                  - name: ADMIN_USER
+                    value: "{{ ums_admin_user }}"
+                  - name: OIDC_HOST
+                    value: "ums-svc.{{ baw_namespace }}.svc.cluster.local:9443"
+                  - name: APPENGINE_HOST
+                    value: "baw-ae-service.{{ baw_namespace }}.svc"
+                  - name: RESOURCE_REGISTRY_TRUSTSTORE
+                    value: "/shared/tls/truststore/pkcs12/trusts.p12"
+                  - name: AE_CONTEXT_ROOT_PREFIX
+                    value: ""
+                  - name: PODNAME
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: metadata.name
+                  - name: LOG_FILE_PATH
+                    value: logs/application/AE/$(PODNAME)
+                envFrom:
+                  - configMapRef:
+                      name: baw-ae-configuration
+                volumeMounts:
+                  - name: temp-folder
+                    mountPath: /tmp
+                  - name: tls-stores
+                    mountPath: /shared/tls/truststore/pkcs12/trusts.p12
+                    subPath: truststore/pkcs12/trusts.p12
+                    readOnly: true
+                  - name: ae-log-pv
+                    mountPath: /logs/application
+                  - name: log-rotate-config
+                    mountPath: /etc/supervisor/ext/filebeat.conf
+                    subPath: filebeat.conf
+                  - name: log-rotate-config
+                    mountPath: /etc/supervisor/ext/logging.conf
+                    subPath: logging.conf
+                  - name: credentials-env
+                    mountPath: /credentials
+              # Step 3: seed .env
+              - name: init-config
+                image: "{{ ae_image }}"
+                imagePullPolicy: IfNotPresent
+                securityContext:
+                  privileged: false
+                  readOnlyRootFilesystem: true
+                  allowPrivilegeEscalation: false
+                  runAsNonRoot: true
+                  capabilities:
+                    drop: [ALL]
+                command:
+                  - /bin/bash
+                  - -ec
+                  - cp /usr/home/solution-server/.env /config/
+                volumeMounts:
+                  - name: config-folder
+                    mountPath: /config
+            containers:
+              # Step 4: import base toolkits
+              - name: import-toolkits
+                image: "{{ ae_image }}"
+                imagePullPolicy: IfNotPresent
+                securityContext:
+                  privileged: false
+                  readOnlyRootFilesystem: true
+                  allowPrivilegeEscalation: false
+                  runAsNonRoot: true
+                  capabilities:
+                    drop: [ALL]
+                env:
+                  - name: AE_NODE_ENV
+                    value: "production"
+                  - name: DESIGNER_SERVER
+                    value: "true"
+                  - name: ADMIN_USER
+                    value: "{{ ums_admin_user }}"
+                  - name: TEMPORARY_FILE_DIRECTORY
+                    value: "/shared/ae-shared-file"
+                  - name: CORS_ALLOWED_ORIGINS
+                    value: "https://{{ baw_hostname }}"
+                  - name: AE_CONTEXT_ROOT_PREFIX
+                    value: ""
+                  - name: SERVICES
+                    value: "system_artifact_import"
+                  - name: PODNAME
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: metadata.name
+                  - name: LOG_FILE_PATH
+                    value: /logs/application/AE/$(PODNAME)/
+                envFrom:
+                  - configMapRef:
+                      name: baw-ae-configuration
+                volumeMounts:
+                  - name: system-log
+                    mountPath: /logs/system
+                  - name: config-folder
+                    mountPath: /usr/home/solution-server/.env
+                    subPath: .env
+                  - name: temp-folder
+                    mountPath: /tmp
+                  - name: tls-stores
+                    mountPath: /shared/tls
+                  - name: models
+                    mountPath: /usr/home/solution-server/models
+                  - name: log-setting
+                    mountPath: /etc/nodejs
+                  - name: ae-file-pv
+                    mountPath: /shared/ae-shared-file
+                  - name: credentials
+                    mountPath: /usr/home/solution-server/secrets.env
+                    subPath: secrets.env
+                  - name: plugin-script
+                    mountPath: /shared/scripts
+                  - name: log-rotate-config
+                    mountPath: /etc/supervisor/ext/filebeat.conf
+                    subPath: filebeat.conf
+                  - name: log-rotate-config
+                    mountPath: /etc/supervisor/ext/logging.conf
+                    subPath: logging.conf
+                  - name: ae-log-pv
+                    mountPath: /logs/application
+            volumes:
+              - name: temp-folder
+                emptyDir: {}
+              - name: config-folder
+                emptyDir: {}
+              - name: models
+                emptyDir: {}
+              - name: tls-stores
+                emptyDir: {}
+              - name: ae-file-pv
+                emptyDir: {}
+              - name: ae-log-pv
+                emptyDir: {}
+              - name: system-log
+                emptyDir: {}
+              - name: keypair-secret
+                secret:
+                  secretName: baw-app-engine-tls-secret
+              - name: trust-tls-volume
+                projected:
+                  defaultMode: 0770
+                  sources:
+                    - configMap:
+                        name: shared-ssl-config
+                        items:
+                          - key: ca.crt
+                            path: ca.crt
+              - name: log-rotate-config
+                configMap:
+                  name: baw-ae-logrotate
+              - name: log-setting
+                configMap:
+                  name: baw-ae-file-config
+              - name: plugin-script
+                configMap:
+                  defaultMode: 0551
+                  name: baw-ae-scripts
+              - name: credentials
+                secret:
+                  defaultMode: 0551
+                  secretName: baw-ae-credential-init
+              - name: credentials-env
+                projected:
+                  sources:
+                    - secret:
+                        name: baw-app-engine-admin-secret
+                        items:
+                          - key: FUNCTION_ADMIN_USER
+                            path: OIDC_USERNAME
+                          - key: FUNCTION_ADMIN_PWD
+                            path: OIDC_PASSWORD
+                          - key: OPENID_CLIENT_ID
+                            path: APP_ENGINE_CLIENT_ID
+                          - key: OPENID_CLIENT_SECRET
+                            path: APP_ENGINE_CLIENT_SECRET
+                          - key: AE_DATABASE_USER
+                            path: AE_DATABASE_USER
+                          - key: AE_DATABASE_PWD
+                            path: AE_DATABASE_PWD
+                          - key: SSL_KEYSTORE_PASSWORD
+                            path: KEYSTORE_PASSWORD
+  when: _ae_dbinit_done.stdout != 'True'
+
+- name: Wait for App Engine db-init Job to complete
+  ansible.builtin.shell: >
+    oc wait job/baw-ae-db-job -n {{ baw_namespace }}
+    --for=condition=complete --timeout={{ bastudio_job_timeout }}s
+  changed_when: false
+  ignore_errors: true
+  when: _ae_dbinit_done.stdout != 'True'
+
 # ── Deployment ────────────────────────────────────────────────────────────────
 
 - name: Deploy App Engine
