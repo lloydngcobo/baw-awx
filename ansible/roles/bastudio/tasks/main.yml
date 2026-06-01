@@ -1529,6 +1529,188 @@
     -n {{ baw_namespace }} --timeout={{ bastudio_job_timeout }}s
   changed_when: false
 
+- name: Create bas-secrets for workplace-init
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: bas-secrets
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-bastudio
+      type: Opaque
+      stringData:
+        umsAdminUser: "{{ ums_admin_user }}"
+        umsAdminPassword: "{{ ums_admin_password }}"
+        oidcClientId: bastudio
+        oidcClientSecret: bastudio-secret-key
+        navigatorUsername: "{{ cpe_admin_user }}"
+        navigatorPassword: "{{ cpe_admin_password }}"
+
+- name: Create BAStudio workplace-init Job
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: job-bas-workplace
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: job-bas-workplace
+      spec:
+        completions: 1
+        parallelism: 1
+        backoffLimit: 15
+        manualSelector: false
+        completionMode: NonIndexed
+        template:
+          metadata:
+            labels:
+              name: job-bas-workplace
+          spec:
+            restartPolicy: OnFailure
+            serviceAccountName: default
+            terminationGracePeriodSeconds: 30
+            automountServiceAccountToken: false
+            dnsPolicy: ClusterFirst
+            securityContext:
+              seccompProfile:
+                type: RuntimeDefault
+            initContainers:
+              - name: wait-for-icn
+                image: registry.access.redhat.com/ubi8/ubi-minimal:latest
+                imagePullPolicy: IfNotPresent
+                command:
+                  - sh
+                  - '-c'
+                  - |
+                    echo "Waiting for ICN to be ready..."
+                    until curl -k -s -o /dev/null -w "%{http_code}" https://icn-svc.{{ baw_namespace }}.svc.cluster.local:9443/navigator | grep -q "200\|302\|401"; do
+                      echo "ICN not ready yet, retrying in 15s..."
+                      sleep 15
+                    done
+                    echo "ICN is ready."
+                securityContext:
+                  capabilities:
+                    drop:
+                      - ALL
+                  privileged: false
+                  runAsNonRoot: true
+                  allowPrivilegeEscalation: false
+                  seccompProfile:
+                    type: RuntimeDefault
+            containers:
+              - name: baw-ibm-workplace-init-job
+                image: "cp.icr.io/cp/cp4a/baw/iaws-ibm-workplace:25.0.1"
+                imagePullPolicy: IfNotPresent
+                terminationMessagePath: /dev/termination-log
+                terminationMessagePolicy: File
+                securityContext:
+                  capabilities:
+                    drop:
+                      - ALL
+                  privileged: false
+                  runAsNonRoot: true
+                  readOnlyRootFilesystem: true
+                  allowPrivilegeEscalation: false
+                  seccompProfile:
+                    type: RuntimeDefault
+                command:
+                  - /bin/bash
+                  - '-ec'
+                  - |+
+                    for filename in /credentials/*; do
+                      export $(basename $filename)=$(cat $filename);
+                    done
+                    mkdir -p /logs/application/${HOSTNAME}
+                    cp /opt/ibm/applications/publishApplication.sh /tmp/publishApplication.sh
+                    sed -i 's/grep -E $grep_status/grep -E "$grep_status|204"/' /tmp/publishApplication.sh
+                    sed -i 's|checkLiveness "https://$VAR_APPENGINE_HOST/k8s/liveliness" "200"||' /tmp/publishApplication.sh
+                    sed -i 's/local statusCode=201/local statusCode=200/' /tmp/publishApplication.sh
+                    sed -i 's/VAR_PLUGINS="IbmbpmSolutionDiscoveryPlugin,WalkMePlugin"/VAR_PLUGINS=""/' /tmp/publishApplication.sh
+                    chmod +x /tmp/publishApplication.sh
+                    exec /tmp/publishApplication.sh
+                env:
+                  - name: OIDC_HOST
+                    value: "ums-svc.{{ baw_namespace }}.svc.cluster.local:9443"
+                  - name: NAVIGATOR_HOST
+                    value: "icn-svc.{{ baw_namespace }}.svc.cluster.local:9443"
+                  - name: APPENGINE_HOST
+                    value: "bastudio-svc.{{ baw_namespace }}.svc.cluster.local:9443/bas"
+                  - name: APP_ENGINE_CONNECTION_REPO_ID
+                    value: 'ICMTarget Objectstore'
+                  - name: DISABLE_BASIC_AUTH
+                    value: 'False'
+                  - name: CURL_CA_BUNDLE
+                    value: /shared/resources/cert-trusted/ca.crt
+                  - name: SSL_CERT_FILE
+                    value: /shared/resources/cert-trusted/ca.crt
+                  - name: ZEN_JWK_URL
+                    value: ''
+                  - name: ZEN_PRE_AUTH_URL
+                    value: ''
+                  - name: OPENID_ID_TOKEN_URL
+                    value: ''
+                resources:
+                  limits:
+                    cpu: '1'
+                    ephemeral-storage: 2Gi
+                    memory: 512Mi
+                  requests:
+                    cpu: 100m
+                    ephemeral-storage: 1Gi
+                    memory: 128Mi
+                volumeMounts:
+                  - name: temp-folder
+                    mountPath: /tmp
+                  - name: log-pvc
+                    mountPath: /logs/application
+                  - name: credentials
+                    mountPath: /credentials
+                  - name: ca-tls-volume
+                    mountPath: /shared/resources/cert-trusted
+            volumes:
+              - name: temp-folder
+                emptyDir: {}
+              - name: log-pvc
+                emptyDir: {}
+              - name: ca-tls-volume
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - name: credentials
+                projected:
+                  defaultMode: 0777
+                  sources:
+                    - secret:
+                        name: bas-secrets
+                        items:
+                          - key: umsAdminUser
+                            path: OIDC_USERNAME
+                          - key: umsAdminPassword
+                            path: OIDC_PASSWORD
+                          - key: oidcClientId
+                            path: APP_ENGINE_CLIENT_ID
+                          - key: oidcClientSecret
+                            path: APP_ENGINE_CLIENT_SECRET
+                          - key: navigatorUsername
+                            path: NAVIGATOR_USERNAME
+                          - key: navigatorPassword
+                            path: NAVIGATOR_PASSWORD
+            imagePullSecrets:
+              - name: ibm-entitlement-key
+
+- name: Wait for workplace-init job to complete
+  ansible.builtin.shell: >
+    kubectl wait --for=condition=complete job/job-bas-workplace
+    -n {{ baw_namespace }} --timeout={{ bastudio_job_timeout }}s
+  changed_when: false
+
 - name: BAStudio summary
   ansible.builtin.debug:
     msg:
