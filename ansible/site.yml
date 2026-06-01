@@ -182,15 +182,10 @@
           - "    GraphQL      : https://{{ baw_hostname }}/content-services-graphql/"
           - "    UMS          : https://{{ baw_hostname }}/ums/"
           - ""
-          - "{% if deploy_baw_runtime | default(false) %}  Optional Runtime URLs:
+          - "  Optional URLs (if deployed):"
           - "    BAW Runtime  : https://{{ baw_hostname }}/baw/"
-          - "{% endif %}"
-          - "{% if deploy_app_engine | default(false) %}  Optional Runtime URLs (cont):
           - "    App Engine   : https://{{ baw_hostname }}/playback/"
-          - "{% endif %}"
-          - "{% if deploy_odm | default(false) %}  Optional Runtime URLs (cont):
           - "    ODM          : https://{{ baw_hostname }}/res/"
-          - "{% endif %}"
           - ""
           - "  Default credentials: bawadmin / {{ ldap_admin_password }}"
           - "  FileNet admin     : p8admin / {{ cpe_admin_password }}"
