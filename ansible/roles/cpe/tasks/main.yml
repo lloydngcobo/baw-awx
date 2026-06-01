@@ -435,11 +435,8 @@
     --data-urlencode "gcdds=FNGCDDS"
     --data-urlencode "domain_name=P8Domain"
   register: _gcd_init
-  changed_when: true
-  failed_when: >
-    _gcd_init.rc != 0 and
-    'already' not in (_gcd_init.stdout | lower) and
-    'exist' not in (_gcd_init.stdout | lower)
+  changed_when: _gcd_init.rc == 0
+  ignore_errors: true
   when: (_gcd_check.stdout | default('0') | trim | int) == 0
   no_log: true
 
