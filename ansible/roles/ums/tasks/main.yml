@@ -155,9 +155,8 @@
               ── Derby embedded databases (homelab) ───────────────────────────
               Derby is bundled in the UMS image (DerbyEmbeddedLib defined in
               server.xml). No external DB or JDBC driver needed.
-              IMPORTANT: data is ephemeral (lost on pod restart). Ansible
-              re-registers OIDC clients on each deployment run, so this is
-              acceptable for homelab use.
+              NOTE: Used for UMS team-server data only. OIDC clients are defined
+              statically via ums-sso-xml ConfigMap (localStore), not in Derby.
             -->
             <dataSource id="oauthDatasource" jndiName="jdbc/oauthDerbyDS">
               <jdbcDriver libraryRef="DerbyEmbeddedLib"/>
@@ -168,6 +167,131 @@
               <jdbcDriver libraryRef="DerbyEmbeddedLib"/>
               <properties.derby.embedded databaseName="TSDB" createDatabase="create"/>
             </dataSource>
+
+          </server>
+
+# ── SSO XML (static OIDC localStore) ─────────────────────────────────────────
+# Overrides the image's sso.xml (Derby databaseStore) with a localStore so OIDC
+# clients survive pod restarts without re-registration via DCR API.
+
+- name: Create UMS SSO XML ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ums-sso-xml
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-ums
+      data:
+        sso.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server description="User Management Service - custom sso.xml">
+            <featureManager>
+              <feature>ibmUserManagement:userManagementServiceAuthentication-1.3</feature>
+              <feature>ibmUserManagement:userManagementServiceHealth-1.0</feature>
+            </featureManager>
+
+            <keyStore
+              id="jwtKeyStore"
+              location="${ums.ssl.jwtKeystore.location}"
+              password="${ums.ssl.jwtKeystore.password}"
+              type="${ums.ssl.keystore.type}" />
+
+            <ltpa id="ltpaconfig"
+              keysFileName="${ums.ltpa.location}"
+              keysPassword="${ums.ltpa.password}"
+              expiration="${ums.ltpa.expiration}" />
+
+            <oauth-roles id="oauthRoles">
+              <authenticated>
+                <special-subject type="ALL_AUTHENTICATED_USERS" />
+              </authenticated>
+              <clientManager>
+                <group name="${ums.oauth.clientmanager.group}" />
+                <user name="${ums.admin.user}" />
+                <user name="${ums.oauth.clientmanager.user}" />
+              </clientManager>
+              <tokenManager>
+                <group name="${ums.oauth.tokenmanager.group}" />
+                <user name="${ums.admin.user}" />
+              </tokenManager>
+            </oauth-roles>
+
+            <oauthProvider
+              id="oidcOAuthProvider"
+              internalClientId="${ums.oauth.internalClientId}"
+              internalClientSecret="${ums.oauth.internalClientSecret}"
+              accessTokenLifetime="${ums.oauth.accessTokenLifetime}"
+              appTokenLifetime="${ums.oauth.appTokenLifetime}"
+              appPasswordLifetime="${ums.oauth.appPasswordLifetime}"
+              appTokenOrPasswordLimit="${ums.oauth.appTokenOrPasswordLimit}"
+              clientSecretEncoding="plain"
+              oauthOnly="false"
+              customLoginURL="/ums/login"
+              logoutRedirectURL="${ums.oauth.logoutRedirectURL}">
+              <localStore>
+                <!-- BAStudio: publishApplication.sh + browser login -->
+                <client name="bastudio"
+                        secret="{{ ums_admin_password }}"
+                        scope="openid profile email"
+                        preAuthorizedScope="openid profile email"
+                        grantTypes="authorization_code implicit client_credentials password refresh_token"
+                        responseTypes="code token id_token"
+                        introspectTokens="true"
+                        enabled="true">
+                  <redirect>https://bastudio-svc.{{ baw_namespace }}.svc.cluster.local:9443/oidcclient/redirect/bastudio</redirect>
+                  <redirect>https://bastudio-svc.{{ baw_namespace }}.svc.cluster.local:9443/oidcclient/redirect/umsClient</redirect>
+                  <redirect>https://{{ baw_hostname }}/bas/oidcclient/redirect/bastudio</redirect>
+                  <redirect>https://{{ baw_hostname }}/oidcclient/redirect/umsClient</redirect>
+                  <redirect>https://{{ baw_hostname }}/bas/oidcclient/redirect/umsClient</redirect>
+                </client>
+                <!-- UMS internal client -->
+                <client name="umsinternalclientid"
+                        secret="{{ ums_internal_client_secret }}"
+                        scope="openid profile"
+                        grantTypes="authorization_code implicit client_credentials password refresh_token"
+                        responseTypes="code token id_token"
+                        introspectTokens="true"
+                        enabled="true" />
+                <!-- BAW Runtime -->
+                <client name="PSLiberty"
+                        secret="{{ ums_admin_password }}"
+                        scope="openid profile email"
+                        preAuthorizedScope="openid profile email"
+                        grantTypes="authorization_code implicit client_credentials password refresh_token"
+                        responseTypes="code token id_token"
+                        introspectTokens="true"
+                        enabled="true">
+                  <redirect>https://baw-runtime-svc.{{ baw_namespace }}.svc.cluster.local:9443/oidcclient/redirect/PSLiberty</redirect>
+                  <redirect>https://{{ baw_hostname }}/oidcclient/redirect/PSLiberty</redirect>
+                  <redirect>https://{{ baw_hostname }}/ProcessPortal/oidcclient/redirect/umsClient</redirect>
+                </client>
+                <!-- App Engine -->
+                <client name="baw-ae"
+                        secret="{{ ums_admin_password }}"
+                        scope="openid profile email"
+                        preAuthorizedScope="openid profile email"
+                        grantTypes="authorization_code implicit client_credentials password refresh_token"
+                        responseTypes="code token id_token"
+                        introspectTokens="true"
+                        enabled="true">
+                  <redirect>https://{{ baw_hostname }}/auth/openidconnect/callback</redirect>
+                </client>
+              </localStore>
+            </oauthProvider>
+
+            <openidConnectProvider
+              id="ums"
+              httpsRequired="true"
+              oauthProviderRef="oidcOAuthProvider"
+              issuerIdentifier="${ums.oidc.issuerIdentifier}"
+              sessionManaged="true"
+              keyStoreRef="jwtKeyStore"
+              signatureAlgorithm="RS256"
+              idTokenCacheEnabled="${ums.oidc.enableIdTokenCache}" />
 
           </server>
 
@@ -257,6 +381,11 @@
                   # TLS certificates (PKCS12) referenced from ums.xml
                   - name: tls
                     mountPath: /shared/tls/pkcs12
+                  # Static OIDC localStore — overrides image's Derby-backed sso.xml
+                  - name: ums-sso-xml
+                    mountPath: /opt/ibm/wlp/usr/servers/ums/sso.xml
+                    subPath: sso.xml
+                    readOnly: true
             volumes:
               # ConfigMap filtered to ums.xml only → placed at shared/resources/config/
               - name: ums-global-config
@@ -276,6 +405,13 @@
                       path: server.p12
                     - key: trusts.p12
                       path: trusts.p12
+              # Static OIDC client definitions — overrides the image's Derby sso.xml
+              - name: ums-sso-xml
+                configMap:
+                  name: ums-sso-xml
+                  items:
+                    - key: sso.xml
+                      path: sso.xml
 
 # ── Service ───────────────────────────────────────────────────────────────────
 
