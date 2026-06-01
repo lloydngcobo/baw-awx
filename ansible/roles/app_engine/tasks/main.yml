@@ -197,8 +197,7 @@
                   failureThreshold: 20
                 volumeMounts:
                   - name: common-config
-                    mountPath: /etc/nodejs/common-config.yml
-                    subPath: common-config.yml
+                    mountPath: /etc/nodejs
                   - name: logs
                     mountPath: /opt/ibm/ae/logs
                   - name: tls
