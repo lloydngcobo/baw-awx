@@ -149,6 +149,7 @@ cpe_host: "cpe-svc.baw.svc.cluster.local"
 cpe_port: "9443"
 cpe_admin_user: "p8admin"
 cpe_admin_password: "Password1"   # REQUIRED
+cpe_domain_name: "P8Domain"
 
 # =============================================================================
 # UMS (User Management Service)

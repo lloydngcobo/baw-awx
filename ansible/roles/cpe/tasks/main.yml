@@ -68,6 +68,18 @@
               <connectionManager maxPoolSize="20" minPoolSize="1"/>
             </dataSource>
 
+            <dataSource id="FNGCDDSXA" jndiName="FNGCDDSXA"
+                        type="javax.sql.XADataSource">
+              <jdbcDriver libraryRef="PostgreSQLLib"/>
+              <properties.postgresql
+                serverName="{{ postgres_host }}"
+                portNumber="{{ postgres_port }}"
+                databaseName="{{ gcd_db_name }}"
+                user="${env.GCD_DB_USER}"
+                password="${env.GCD_DB_PASS}"/>
+              <connectionManager maxPoolSize="20" minPoolSize="1"/>
+            </dataSource>
+
             <dataSource id="FNOSDOCS" jndiName="FNOSDOCS"
                         type="javax.sql.XADataSource">
               <jdbcDriver libraryRef="PostgreSQLLib"/>
@@ -281,6 +293,20 @@
                     value: "true"
                   - name: TZ
                     value: "{{ timezone }}"
+                  - name: CONTAINERTYPE
+                    value: "1"
+                  - name: CPESTATICPORT
+                    value: "false"
+                  - name: GCDJNDINAME
+                    value: "FNGCDDS"
+                  - name: GCDJNDIXANAME
+                    value: "FNGCDDSXA"
+                  - name: LOG_FORMAT
+                    value: "json"
+                  - name: POD_IP
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: status.podIP
                   - name: JVM_HEAP_XMS
                     value: "512m"
                   - name: JVM_HEAP_XMX
@@ -409,35 +435,22 @@
   changed_when: false
 
 # ── GCD initialization (idempotent) ──────────────────────────────────────────
-# Uses the ACCE REST API to check and create the FileNet P8 domain (GCD).
+# Uses the container-native REST API (CONTAINERTYPE=1) to create the FileNet
+# P8 domain. Returns 409 if domain already exists — both 200 and 409 are success.
 # Object stores (DOCS/DOS/TOS) are created by the BAStudio content-init Job (step 10).
 
-- name: Check if FileNet domain already initialized
+- name: Initialize FileNet GCD domain via container-native API
   ansible.builtin.shell: >
     oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} --
-    curl -sk
+    curl -sk -o /dev/null -w "%{http_code}"
+    -X POST
     -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
-    -H "Accept: application/atom+xml"
-    "https://localhost:9443/acce/dispatcher/atom/1.0/domains"
-    | grep -c "<entry>" || echo "0"
-  register: _gcd_check
-  changed_when: false
-  no_log: true
-
-- name: Initialize FileNet GCD domain via ACCE REST API
-  ansible.builtin.shell: >
-    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} --
-    curl -sk -X POST
-    -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
-    -H "Content-Type: application/x-www-form-urlencoded"
-    "https://localhost:9443/acce/init"
-    --data-urlencode "new_domain=true"
-    --data-urlencode "gcdds=FNGCDDS"
-    --data-urlencode "domain_name=P8Domain"
+    -H "Content-Type: application/json"
+    "http://localhost:9080/cpe/init/v1/domain"
+    -d '{"serviceUser":"{{ cpe_admin_user }}","serviceUserPassword":"{{ cpe_admin_password }}","encryptionKeyLength":128,"domainName":"{{ cpe_domain_name }}"}'
   register: _gcd_init
-  changed_when: _gcd_init.rc == 0
+  changed_when: _gcd_init.stdout | trim == "200"
   ignore_errors: true
-  when: (_gcd_check.stdout | default('0') | trim | int) == 0
   no_log: true
 
 - name: CPE summary
