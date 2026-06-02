@@ -22,6 +22,66 @@
     state: directory
     mode: "0700"
 
+# ── Reuse existing cluster certs (CRITICAL: prevents CA regeneration) ──────────
+# cert_work_dir is /tmp in the AWX execution environment — ephemeral and empty
+# on every run. Without this, the stat-based "already generated?" checks below
+# always fail and the role mints a BRAND-NEW Root CA + server cert each run,
+# overwriting baw-ssl-certs / shared-ssl-config. Pods not restarted afterwards
+# keep the old CA -> cross-pod TLS breaks (PKIX "does not chain", CWPKI0823E,
+# ICN "repository not available", BAStudio CWWKS1708E).
+#
+# So: if the baw-ssl-certs Secret already exists, RESTORE its material into
+# cert_work_dir. The stat checks then find the files and skip ALL generation,
+# making the role idempotent and stable across runs. Fresh certs are only
+# generated the first time (Secret absent).
+
+- name: Look for existing baw-ssl-certs Secret (reuse to avoid regenerating CA)
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: baw-ssl-certs
+    namespace: "{{ baw_namespace }}"
+  register: _existing_certs
+
+- name: Set fact — existing certs present
+  ansible.builtin.set_fact:
+    _reuse_certs: "{{ (_existing_certs.resources | default([]) | length) > 0 }}"
+
+- name: Restore existing PEM certs into work dir
+  ansible.builtin.copy:
+    dest: "{{ cert_work_dir }}/{{ item.file }}"
+    content: "{{ _existing_certs.resources[0].data[item.key] | b64decode }}"
+    mode: "0600"
+  loop:
+    - { key: "ca.crt",  file: "ca.crt" }
+    - { key: "ca.key",  file: "ca.key" }
+    - { key: "tls.crt", file: "shared.crt" }
+    - { key: "tls.key", file: "shared.key" }
+  loop_control:
+    label: "{{ item.file }}"
+  when: _reuse_certs | bool
+  no_log: true
+
+- name: Restore existing PKCS12 keystores into work dir (binary)
+  ansible.builtin.shell: >
+    printf '%s' '{{ _existing_certs.resources[0].data[item.key] }}'
+    | base64 -d > {{ cert_work_dir }}/{{ item.file }}
+  loop:
+    - { key: "server.p12", file: "server.p12" }
+    - { key: "trusts.p12", file: "trusts.p12" }
+  loop_control:
+    label: "{{ item.file }}"
+  when: _reuse_certs | bool
+  changed_when: false
+  no_log: true
+
+- name: Reuse notice
+  ansible.builtin.debug:
+    msg: >-
+      Reusing existing baw-ssl-certs (Root CA preserved) —
+      certificate generation skipped.
+  when: _reuse_certs | bool
+
 # ── Root CA ───────────────────────────────────────────────────────────────────
 
 - name: Check if Root CA already generated
