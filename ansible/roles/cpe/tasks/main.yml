@@ -92,6 +92,18 @@
               <connectionManager maxPoolSize="20" minPoolSize="1"/>
             </dataSource>
 
+            <dataSource id="FNOSDOCSXA" jndiName="FNOSDOCSXA"
+                        type="javax.sql.XADataSource">
+              <jdbcDriver libraryRef="PostgreSQLLib"/>
+              <properties.postgresql
+                serverName="{{ postgres_host }}"
+                portNumber="{{ postgres_port }}"
+                databaseName="{{ docs_db_name }}"
+                user="${env.DOCS_DB_USER}"
+                password="${env.DOCS_DB_PASS}"/>
+              <connectionManager maxPoolSize="20" minPoolSize="1"/>
+            </dataSource>
+
             <dataSource id="FNOS2DS" jndiName="FNOS2DS"
                         type="javax.sql.XADataSource">
               <jdbcDriver libraryRef="PostgreSQLLib"/>
@@ -104,7 +116,31 @@
               <connectionManager maxPoolSize="20" minPoolSize="1"/>
             </dataSource>
 
+            <dataSource id="FNOS2DSXA" jndiName="FNOS2DSXA"
+                        type="javax.sql.XADataSource">
+              <jdbcDriver libraryRef="PostgreSQLLib"/>
+              <properties.postgresql
+                serverName="{{ postgres_host }}"
+                portNumber="{{ postgres_port }}"
+                databaseName="{{ dos_db_name }}"
+                user="${env.DOS_DB_USER}"
+                password="${env.DOS_DB_PASS}"/>
+              <connectionManager maxPoolSize="20" minPoolSize="1"/>
+            </dataSource>
+
             <dataSource id="FNOS3DS" jndiName="FNOS3DS"
+                        type="javax.sql.XADataSource">
+              <jdbcDriver libraryRef="PostgreSQLLib"/>
+              <properties.postgresql
+                serverName="{{ postgres_host }}"
+                portNumber="{{ postgres_port }}"
+                databaseName="{{ tos_db_name }}"
+                user="${env.TOS_DB_USER}"
+                password="${env.TOS_DB_PASS}"/>
+              <connectionManager maxPoolSize="20" minPoolSize="1"/>
+            </dataSource>
+
+            <dataSource id="FNOS3DSXA" jndiName="FNOS3DSXA"
                         type="javax.sql.XADataSource">
               <jdbcDriver libraryRef="PostgreSQLLib"/>
               <properties.postgresql
@@ -303,6 +339,12 @@
                     value: "FNGCDDSXA"
                   - name: LOG_FORMAT
                     value: "json"
+                  - name: DISABLE_BASIC_AUTH
+                    value: "true"
+                  - name: JVM_CUSTOMIZE_OPTIONS
+                    value: "-Dcom.ibm.ws.session.cookie.secure=false -DInvalidateOnUnauthorizedSessionRequestException=false -Dcom.ibm.ws.session.useContextRootAsCookiePath=false -Dcom.filenet.authentication.wsi.AutoDetectAuthToken=true -DFileNet.WSI.AutoDetectLTPAToken=true -Dcom.filenet.authentication.token.userid=sso:ltpa"
+                  - name: GATEWAY_SERVICE_URI
+                    value: "http://cpe-svc.{{ baw_namespace }}.svc.cluster.local:9080/WSCPEService/WSCPEServiceSoapService"
                   - name: POD_IP
                     valueFrom:
                       fieldRef:
