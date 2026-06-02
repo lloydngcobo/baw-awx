@@ -1745,6 +1745,33 @@
   changed_when: false
   when: _workplace_init_done.stdout != 'True'
 
+# ── Fix BPM Navigator plugin REST origin (browser reachability) ────────────────
+# workplace-init registers IbmbpmNavigatorPlugin in ICN with BPMRestOrigin set to
+# the INTERNAL bastudio-svc URL. The Case Client's browser JS calls BPMRestOrigin
+# for straight-through processing, but the browser cannot reach an internal
+# cluster service name -> "The resources required for straight-through processing
+# are not reachable". Repoint it to the external route (bastudio-route serves
+# /bas, and the plugin appends /bas/rest/bpm/...). Idempotent.
+
+- name: Repoint BPM plugin BPMRestOrigin to external route in ICN config
+  ansible.builtin.shell: >
+    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} --
+    env PGPASSWORD={{ postgres_admin_password }}
+    psql -U postgres -d {{ icn_db_name }} -c
+    "UPDATE icndb.configuration SET attributes = REPLACE(attributes,
+    'https://bastudio-svc.{{ baw_namespace }}.svc.cluster.local:9443',
+    'https://{{ baw_hostname }}:443')
+    WHERE id='plugin.navigator.IbmbpmNavigatorPlugin'
+    AND attributes LIKE '%BPMRestOrigin%bastudio-svc%'"
+  register: _bpm_origin_fix
+  changed_when: "'UPDATE 0' not in _bpm_origin_fix.stdout"
+
+- name: Restart ICN if BPM origin changed (reload plugin config)
+  ansible.builtin.shell: >
+    oc rollout restart deployment/icn -n {{ baw_namespace }}
+  when: "'UPDATE 0' not in _bpm_origin_fix.stdout"
+  changed_when: true
+
 - name: BAStudio summary
   ansible.builtin.debug:
     msg:
