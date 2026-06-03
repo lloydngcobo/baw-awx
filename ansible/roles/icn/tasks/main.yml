@@ -148,6 +148,26 @@
             storage: 5Gi
         storageClassName: "{{ storage_class_name }}"
 
+# Shared with bastudio case-init job — case-init writes ICMAPIPlugin JARs here,
+# ICN reads them from /opt/ibm/plugins/properties. Must exist before ICN pod starts.
+- name: Create bastudio-case-init shared PVC (ICMAPIPlugin JAR staging)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: bastudio-case-init
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw-icn
+      spec:
+        accessModes: [ReadWriteMany]
+        resources:
+          requests:
+            storage: 5Gi
+        storageClassName: "{{ storage_class_name }}"
+
 # ── Deployment ────────────────────────────────────────────────────────────────
 
 - name: Deploy ICN Navigator
