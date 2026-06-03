@@ -74,5 +74,5 @@ additional_build_steps:
     # Install ldap-utils for ldapadd/ldapsearch used in the ldap role
     # Install java-11-openjdk-headless for keytool (creates Java PKCS12 truststores)
     - >-
-      RUN microdnf install -y openldap-clients java-11-openjdk-headless
-      && microdnf clean all
+      RUN dnf install -y openldap-clients java-11-openjdk-headless
+      && dnf clean all
