@@ -349,7 +349,6 @@
         echo CREATED)"
   register: _odm_db
   changed_when: "'CREATED' in _odm_db.stdout"
-  no_log: true
   when: deploy_odm | default(false) | bool
 
 - name: PostgreSQL summary
