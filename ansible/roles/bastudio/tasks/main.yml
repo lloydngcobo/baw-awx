@@ -343,17 +343,13 @@
                   <user-search-attribute>principalName</user-search-attribute>
                   <user-name-identifier>userName</user-name-identifier>
                   <!--
-                    user-uniquename-identifier = userName (NOT id):
-                    SCIM returns id = full LDAP DN (cn=bawadmin,ou=dev,...).
-                    If set to "id", BAW uses the DN as the DB key; bootstrapProcessServer
-                    creates the admin user with user_name="bawadmin" (the short name),
-                    so the lookup fails → getOrCreate allocates a new user_id → tries
-                    to find it in lsw_usr (which bootstrapProcessServer didn't fully
-                    populate due to the FOR UPDATE WITH RS PostgreSQL incompatibility)
-                    → CWTBG0737E. Using "userName" makes BAW match the "bawadmin" key
-                    that exists in lsw_usr_xref from the bootstrap.
+                    user-uniquename-identifier = id (ref: baw-microshift-rhel):
+                    UMS SCIM uses full LDAP DN as user id (cn=bawadmin,ou=dev,...).
+                    BAW calls GET /ibm/api/scim/Users/{id} — must use the DN.
+                    A DB fixup task updates lsw_usr user_name='bawadmin' to the
+                    full DN so the bootstrapped admin record is still found.
                   -->
-                  <user-uniquename-identifier>userName</user-uniquename-identifier>
+                  <user-uniquename-identifier>id</user-uniquename-identifier>
                   <user-displayname-query-attr>displayName</user-displayname-query-attr>
                   <user-displayname-result-attr>displayName</user-displayname-result-attr>
                   <group-search-attribute>principalName</group-search-attribute>
@@ -1088,8 +1084,8 @@
     env PGPASSWORD='{{ bas_db_pass }}'
     psql -U {{ bas_db_user }} -d {{ bas_db_name }}
     -c "INSERT INTO {{ bas_db_user }}.lsw_usr (user_id,user_name,passwd,full_name,is_disabled)
-        VALUES (1,'{{ ums_admin_user }}','n/a','{{ ums_admin_user }}','F')
-        ON CONFLICT (user_id) DO UPDATE SET user_name='{{ ums_admin_user }}', full_name='{{ ums_admin_user }}';"
+        VALUES (1,'cn={{ ums_admin_user }},{{ ldap_user_base }}','n/a','{{ ums_admin_user }}','F')
+        ON CONFLICT (user_id) DO UPDATE SET user_name='cn={{ ums_admin_user }},{{ ldap_user_base }}', full_name='{{ ums_admin_user }}';"
     -c "INSERT INTO {{ bas_db_user }}.lsw_system (propkey,propvalue) VALUES ('IsRepository','true')
         ON CONFLICT (propkey) DO UPDATE SET propvalue='true';"
   register: _bas_db_fixups
