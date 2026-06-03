@@ -241,6 +241,8 @@
               ldap: 9389
               ldaps: 0
             json-logging: true
+            pwd-policy:
+              enabled: false
           server:
             suffixes:
               - dn: "{{ ldap_base_dn }}"
