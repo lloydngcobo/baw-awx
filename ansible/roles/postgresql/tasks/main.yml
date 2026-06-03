@@ -152,17 +152,14 @@
     oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
       psql -U {{ postgres_admin_user }} -d {{ postgres_db }} -tc \
         \"SELECT 1 FROM pg_database WHERE datname='{{ gcd_db_name }}'\" \
-        | grep -q 1 && echo 'EXISTS' || (
+        | grep -q 1 && echo EXISTS || (
         mkdir -p /var/lib/pgsql/data/{{ gcd_db_name }}
-        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} <<'EOSQL'
-    CREATE ROLE {{ gcd_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ gcd_db_pass }}';
-    CREATE TABLESPACE {{ gcd_db_name }}_tbs OWNER {{ gcd_db_user }}
-      LOCATION '/var/lib/pgsql/data/{{ gcd_db_name }}';
-    CREATE DATABASE {{ gcd_db_name }} OWNER {{ gcd_db_user }}
-      TABLESPACE {{ gcd_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
-    GRANT ALL ON DATABASE {{ gcd_db_name }} TO {{ gcd_db_user }};
-    EOSQL
-        echo 'CREATED')"
+        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} \
+          -c \"CREATE ROLE {{ gcd_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ gcd_db_pass }}'\" \
+          -c \"CREATE TABLESPACE {{ gcd_db_name }}_tbs OWNER {{ gcd_db_user }} LOCATION '/var/lib/pgsql/data/{{ gcd_db_name }}'\" \
+          -c \"CREATE DATABASE {{ gcd_db_name }} OWNER {{ gcd_db_user }} TABLESPACE {{ gcd_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
+          -c \"GRANT ALL ON DATABASE {{ gcd_db_name }} TO {{ gcd_db_user }}\"
+        echo CREATED)"
   register: _gcd
   changed_when: "'CREATED' in _gcd.stdout"
   no_log: true
@@ -172,18 +169,15 @@
     oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
       psql -U {{ postgres_admin_user }} -d {{ postgres_db }} -tc \
         \"SELECT 1 FROM pg_database WHERE datname='{{ docs_db_name }}'\" \
-        | grep -q 1 && echo 'EXISTS' || (
+        | grep -q 1 && echo EXISTS || (
         mkdir -p /var/lib/pgsql/data/{{ docs_db_name }}/data
         mkdir -p /var/lib/pgsql/data/{{ docs_db_name }}/index
-        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} <<'EOSQL'
-    CREATE ROLE {{ docs_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ docs_db_pass }}';
-    CREATE TABLESPACE {{ docs_db_name }}_tbs OWNER {{ docs_db_user }}
-      LOCATION '/var/lib/pgsql/data/{{ docs_db_name }}/data';
-    CREATE DATABASE {{ docs_db_name }} OWNER {{ docs_db_user }}
-      TABLESPACE {{ docs_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
-    GRANT ALL ON DATABASE {{ docs_db_name }} TO {{ docs_db_user }};
-    EOSQL
-        echo 'CREATED')"
+        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} \
+          -c \"CREATE ROLE {{ docs_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ docs_db_pass }}'\" \
+          -c \"CREATE TABLESPACE {{ docs_db_name }}_tbs OWNER {{ docs_db_user }} LOCATION '/var/lib/pgsql/data/{{ docs_db_name }}/data'\" \
+          -c \"CREATE DATABASE {{ docs_db_name }} OWNER {{ docs_db_user }} TABLESPACE {{ docs_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
+          -c \"GRANT ALL ON DATABASE {{ docs_db_name }} TO {{ docs_db_user }}\"
+        echo CREATED)"
   register: _docs
   changed_when: "'CREATED' in _docs.stdout"
   no_log: true
@@ -193,18 +187,15 @@
     oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
       psql -U {{ postgres_admin_user }} -d {{ postgres_db }} -tc \
         \"SELECT 1 FROM pg_database WHERE datname='{{ dos_db_name }}'\" \
-        | grep -q 1 && echo 'EXISTS' || (
+        | grep -q 1 && echo EXISTS || (
         mkdir -p /var/lib/pgsql/data/{{ dos_db_name }}/data
         mkdir -p /var/lib/pgsql/data/{{ dos_db_name }}/index
-        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} <<'EOSQL'
-    CREATE ROLE {{ dos_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ dos_db_pass }}';
-    CREATE TABLESPACE {{ dos_db_name }}_tbs OWNER {{ dos_db_user }}
-      LOCATION '/var/lib/pgsql/data/{{ dos_db_name }}/data';
-    CREATE DATABASE {{ dos_db_name }} OWNER {{ dos_db_user }}
-      TABLESPACE {{ dos_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
-    GRANT ALL ON DATABASE {{ dos_db_name }} TO {{ dos_db_user }};
-    EOSQL
-        echo 'CREATED')"
+        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} \
+          -c \"CREATE ROLE {{ dos_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ dos_db_pass }}'\" \
+          -c \"CREATE TABLESPACE {{ dos_db_name }}_tbs OWNER {{ dos_db_user }} LOCATION '/var/lib/pgsql/data/{{ dos_db_name }}/data'\" \
+          -c \"CREATE DATABASE {{ dos_db_name }} OWNER {{ dos_db_user }} TABLESPACE {{ dos_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
+          -c \"GRANT ALL ON DATABASE {{ dos_db_name }} TO {{ dos_db_user }}\"
+        echo CREATED)"
   register: _dos
   changed_when: "'CREATED' in _dos.stdout"
   no_log: true
@@ -214,18 +205,15 @@
     oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
       psql -U {{ postgres_admin_user }} -d {{ postgres_db }} -tc \
         \"SELECT 1 FROM pg_database WHERE datname='{{ tos_db_name }}'\" \
-        | grep -q 1 && echo 'EXISTS' || (
+        | grep -q 1 && echo EXISTS || (
         mkdir -p /var/lib/pgsql/data/{{ tos_db_name }}/data
         mkdir -p /var/lib/pgsql/data/{{ tos_db_name }}/index
-        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} <<'EOSQL'
-    CREATE ROLE {{ tos_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ tos_db_pass }}';
-    CREATE TABLESPACE {{ tos_db_name }}_tbs OWNER {{ tos_db_user }}
-      LOCATION '/var/lib/pgsql/data/{{ tos_db_name }}/data';
-    CREATE DATABASE {{ tos_db_name }} OWNER {{ tos_db_user }}
-      TABLESPACE {{ tos_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
-    GRANT ALL ON DATABASE {{ tos_db_name }} TO {{ tos_db_user }};
-    EOSQL
-        echo 'CREATED')"
+        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} \
+          -c \"CREATE ROLE {{ tos_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ tos_db_pass }}'\" \
+          -c \"CREATE TABLESPACE {{ tos_db_name }}_tbs OWNER {{ tos_db_user }} LOCATION '/var/lib/pgsql/data/{{ tos_db_name }}/data'\" \
+          -c \"CREATE DATABASE {{ tos_db_name }} OWNER {{ tos_db_user }} TABLESPACE {{ tos_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
+          -c \"GRANT ALL ON DATABASE {{ tos_db_name }} TO {{ tos_db_user }}\"
+        echo CREATED)"
   register: _tos
   changed_when: "'CREATED' in _tos.stdout"
   no_log: true
@@ -235,20 +223,17 @@
     oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
       psql -U {{ postgres_admin_user }} -d {{ postgres_db }} -tc \
         \"SELECT 1 FROM pg_database WHERE datname='{{ icn_db_name }}'\" \
-        | grep -q 1 && echo 'EXISTS' || (
+        | grep -q 1 && echo EXISTS || (
         mkdir -p /var/lib/pgsql/data/{{ icn_db_name }}
-        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} <<'EOSQL'
-    CREATE ROLE {{ icn_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ icn_db_pass }}';
-    CREATE TABLESPACE {{ icn_db_name }}_tbs OWNER {{ icn_db_user }}
-      LOCATION '/var/lib/pgsql/data/{{ icn_db_name }}';
-    CREATE DATABASE {{ icn_db_name }} OWNER {{ icn_db_user }}
-      TABLESPACE {{ icn_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
-    GRANT ALL ON DATABASE {{ icn_db_name }} TO {{ icn_db_user }};
-    \c {{ icn_db_name }}
-    CREATE SCHEMA IF NOT EXISTS icn_schema AUTHORIZATION {{ icn_db_user }};
-    ALTER DATABASE {{ icn_db_name }} SET search_path TO icn_schema;
-    EOSQL
-        echo 'CREATED')"
+        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} \
+          -c \"CREATE ROLE {{ icn_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ icn_db_pass }}'\" \
+          -c \"CREATE TABLESPACE {{ icn_db_name }}_tbs OWNER {{ icn_db_user }} LOCATION '/var/lib/pgsql/data/{{ icn_db_name }}'\" \
+          -c \"CREATE DATABASE {{ icn_db_name }} OWNER {{ icn_db_user }} TABLESPACE {{ icn_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
+          -c \"GRANT ALL ON DATABASE {{ icn_db_name }} TO {{ icn_db_user }}\"
+        psql -U {{ postgres_admin_user }} -d {{ icn_db_name }} \
+          -c \"CREATE SCHEMA IF NOT EXISTS icn_schema AUTHORIZATION {{ icn_db_user }}\" \
+          -c \"ALTER DATABASE {{ icn_db_name }} SET search_path TO icn_schema\"
+        echo CREATED)"
   register: _icn
   changed_when: "'CREATED' in _icn.stdout"
   no_log: true
@@ -259,17 +244,14 @@
     oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
       psql -U {{ postgres_admin_user }} -d {{ postgres_db }} -tc \
         \"SELECT 1 FROM pg_database WHERE datname='{{ bas_db_name }}'\" \
-        | grep -q 1 && echo 'EXISTS' || (
+        | grep -q 1 && echo EXISTS || (
         mkdir -p /var/lib/pgsql/data/{{ bas_db_name }}
-        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} <<'EOSQL'
-    CREATE ROLE {{ bas_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ bas_db_pass }}';
-    CREATE TABLESPACE {{ bas_db_name }}_tbs OWNER {{ bas_db_user }}
-      LOCATION '/var/lib/pgsql/data/{{ bas_db_name }}';
-    CREATE DATABASE {{ bas_db_name }} OWNER {{ bas_db_user }}
-      TABLESPACE {{ bas_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
-    GRANT ALL ON DATABASE {{ bas_db_name }} TO {{ bas_db_user }};
-    EOSQL
-        echo 'CREATED')"
+        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} \
+          -c \"CREATE ROLE {{ bas_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ bas_db_pass }}'\" \
+          -c \"CREATE TABLESPACE {{ bas_db_name }}_tbs OWNER {{ bas_db_user }} LOCATION '/var/lib/pgsql/data/{{ bas_db_name }}'\" \
+          -c \"CREATE DATABASE {{ bas_db_name }} OWNER {{ bas_db_user }} TABLESPACE {{ bas_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
+          -c \"GRANT ALL ON DATABASE {{ bas_db_name }} TO {{ bas_db_user }}\"
+        echo CREATED)"
   register: _bas
   changed_when: "'CREATED' in _bas.stdout"
   no_log: true
@@ -280,17 +262,14 @@
     oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
       psql -U {{ postgres_admin_user }} -d {{ postgres_db }} -tc \
         \"SELECT 1 FROM pg_database WHERE datname='{{ item.db }}'\" \
-        | grep -q 1 && echo 'EXISTS' || (
+        | grep -q 1 && echo EXISTS || (
         mkdir -p /var/lib/pgsql/data/{{ item.db }}
-        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} <<EOSQL
-    CREATE ROLE {{ item.user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ item.pass }}';
-    CREATE TABLESPACE {{ item.db }}_tbs OWNER {{ item.user }}
-      LOCATION '/var/lib/pgsql/data/{{ item.db }}';
-    CREATE DATABASE {{ item.db }} OWNER {{ item.user }}
-      TABLESPACE {{ item.db }}_tbs TEMPLATE template0 ENCODING UTF8;
-    GRANT ALL ON DATABASE {{ item.db }} TO {{ item.user }};
-    EOSQL
-        echo 'CREATED')"
+        psql -U {{ postgres_admin_user }} -d {{ postgres_db }} \
+          -c \"CREATE ROLE {{ item.user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ item.pass }}'\" \
+          -c \"CREATE TABLESPACE {{ item.db }}_tbs OWNER {{ item.user }} LOCATION '/var/lib/pgsql/data/{{ item.db }}'\" \
+          -c \"CREATE DATABASE {{ item.db }} OWNER {{ item.user }} TABLESPACE {{ item.db }}_tbs TEMPLATE template0 ENCODING UTF8\" \
+          -c \"GRANT ALL ON DATABASE {{ item.db }} TO {{ item.user }}\"
+        echo CREATED)"
   register: _baw_rt
   changed_when: "'CREATED' in _baw_rt.stdout"
   no_log: true
