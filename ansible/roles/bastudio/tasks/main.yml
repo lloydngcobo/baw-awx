@@ -486,6 +486,30 @@
             </messagingEngine>
           </server>
 
+        # Shared LTPA keys — identical to CPE and ICN.
+        # Required for LTPA SSO: when a user logs into ICN, the browser's LtpaToken2
+        # cookie (realm defaultldap1Realm) is sent to BAStudio for the STP pre-check.
+        # BAStudio must validate it with the same keys or it redirects to UMS → STP fails.
+        ibm_custom-ltpa.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <ltpa
+              keysFileName="${server.config.dir}/resources/security/custom-ltpa.keys"
+              keysPassword="${ssl_keystore_password}"
+              realm="defaultldap1Realm"
+              expiration="120m" />
+          </server>
+
+        custom-ltpa.keys: |
+          #Wed Jun 25 05:42:33 CEST 2025
+          com.ibm.websphere.CreationDate=Wed Jun 25 05\:42\:33 CEST 2025
+          com.ibm.websphere.CreationHost=localhost
+          com.ibm.websphere.ltpa.3DESKey=Bms6ULbxVu+GeUlHua3GyZNYnh9iehiVfAwEtKnDBFw\=
+          com.ibm.websphere.ltpa.PrivateKey=EHJDUf/xpsC31kg0ijfPl5m/kelEOJ9uzu/3zyMUjnlBXU4X0oY/KHxnkfOYnwlWKKuDJlKA41acg59VUYJwMJQMcuDJfNTlqLFfVivbQcxokzDOqxTrbbRP4gBr8Du2kZKQoqib2htD5J4VgY3bU9O01Ssc2ZScHiMZWfC42Oyx65YZHGqQSxMSDI4VlF2WWYp2IWhcLeJOhu/GDNPc8VbxrTO1TejWmVnTtkfxANlv9vn+3dDkOfaTpmRy+zzw6KpReUCscQgOylBMA0X76Kdv3JEGKRcJGCS2bnjb6bnmGBGiVCOuhzSsXQ/bzbdLpTcp1htcLDO2Dwaim7km9WraNVlwZ48Dlc5XPto/DS8\=
+          com.ibm.websphere.ltpa.PublicKey=AMJpYeSavFgbpBBv8QfC9Xe9mxYmivrLbQZJ6mtSipYjIVVxDl20cZOQFZBSFAuG4rEsqFZ5vqVPxqLMXTa3tSLBAPbVWTRqM33kXjLrWL3iiCeYmhp4WS8+/rTtPbQ0Lt6JGjZKkpws1M16fK1zQ27YSUmGyjISTmg5yzQ2PBzjAQAB
+          com.ibm.websphere.ltpa.Realm=defaultldap1Realm
+          com.ibm.websphere.ltpa.version=1.0
+
         ldap-registry.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
           <!--
@@ -1130,6 +1154,14 @@
                   - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/jms-server.xml
                     subPath: jms-server.xml
+                  # Shared LTPA keys — enables SSO with ICN/CPE (same realm=defaultldap1Realm)
+                  # so browser LtpaToken2 cookie from ICN is accepted by BAStudio → STP works
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ibm_custom-ltpa.xml
+                    subPath: ibm_custom-ltpa.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/resources/security/custom-ltpa.keys
+                    subPath: custom-ltpa.keys
                   - name: tls
                     mountPath: /shared/tls/pkcs12
                   - name: startup-scripts
