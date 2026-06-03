@@ -1327,6 +1327,10 @@
                   # directory so 01-activate-postgresql-ds.sh doesn't fail if it doesn't exist.
                   - name: postgresql-jdbc-driver
                     mountPath: /opt/ibm/wlp/ibmProcessServer/lib/jdbcdrivers/PostgreSQL
+                  # case-init PVC: case-init job writes cbConfig.properties here;
+                  # CaseBuilder reads it at startup to find CPE/object store config.
+                  - name: case-init-shared
+                    mountPath: /opt/ibm/icm/shared
             volumes:
               - name: data
                 persistentVolumeClaim:
@@ -1351,6 +1355,9 @@
                 configMap:
                   name: bastudio-startup-scripts
                   defaultMode: 0755
+              - name: case-init-shared
+                persistentVolumeClaim:
+                  claimName: bastudio-case-init
               - name: postgresql-jdbc-driver
                 emptyDir: {}
 
