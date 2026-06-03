@@ -198,69 +198,19 @@
   changed_when: true
   no_log: true
 
-- name: Write trusts.p12 creation script
-  ansible.builtin.copy:
-    dest: "{{ cert_work_dir }}/make-trusts.py"
-    mode: "0700"
-    content: |
-      #!/usr/bin/env python3
-      # Creates a Java-compatible PKCS12 truststore from a PEM CA certificate.
-      #
-      # ONLY serialize_java_truststore() (cryptography >= 44.0) produces entries
-      # that the IBM Semeru / Oracle JDK recognise as trustedCertEntry (it sets
-      # the Oracle "trustedKeyUsage" bag attribute). The older
-      # serialize_key_and_certificates(cas=[...]) fallback writes plain certBags
-      # WITHOUT that attribute, which IBM JDK keytool reports as 0 trusted
-      # entries -> "trustAnchors parameter must be non-empty" on every TLS call
-      # (e.g. BAStudio -> UMS OIDC token endpoint fails with CWWKS1708E/SEND_401).
-      #
-      # So we REQUIRE cryptography >= 44 and FAIL LOUDLY otherwise rather than
-      # silently shipping an empty truststore. If this fails, REBUILD THE AWX
-      # EXECUTION ENVIRONMENT (execution-environment.yml pins cryptography>=44.0.0;
-      # the baked image may be stale).
-      import sys
-      from cryptography import x509
-      from cryptography.hazmat.primitives.serialization import BestAvailableEncryption
-      from cryptography.hazmat.primitives.serialization.pkcs12 import PKCS12Certificate
-
-      ca_cert_path    = sys.argv[1]
-      truststore_path = sys.argv[2]
-      password        = sys.argv[3].encode()
-
-      try:
-          from cryptography.hazmat.primitives.serialization.pkcs12 import serialize_java_truststore
-      except ImportError:
-          import cryptography
-          sys.exit(
-              "FATAL: cryptography %s lacks serialize_java_truststore (need >= 44.0). "
-              "The produced truststore would have 0 trusted entries and break all "
-              "pod->pod TLS (CWWKS1708E / SEND_401). Rebuild the AWX execution "
-              "environment with cryptography>=44.0.0." % cryptography.__version__
-          )
-
-      with open(ca_cert_path, "rb") as f:
-          ca_cert = x509.load_pem_x509_certificate(f.read())
-
-      p12_cert = PKCS12Certificate(cert=ca_cert, friendly_name=b"baw-root-ca")
-      data = serialize_java_truststore(
-          certs=[p12_cert],
-          encryption_algorithm=BestAvailableEncryption(password),
-      )
-
-      with open(truststore_path, "wb") as f:
-          f.write(data)
-  when: not _p12_stat.stat.exists
-
-- name: Build trusts.p12 (CA cert as Java-compatible trusted cert entry)
-  ansible.builtin.command:
-    argv:
-      - python3
-      - "{{ cert_work_dir }}/make-trusts.py"
-      - "{{ cert_work_dir }}/ca.crt"
-      - "{{ cert_work_dir }}/trusts.p12"
-      - "{{ keystore_password }}"
+- name: Build trusts.p12 (CA cert as Java-compatible trusted cert entry via keytool)
+  ansible.builtin.shell: >
+    keytool -importcert
+    -trustcacerts
+    -alias baw-root-ca
+    -file {{ cert_work_dir }}/ca.crt
+    -keystore {{ cert_work_dir }}/trusts.p12
+    -storetype PKCS12
+    -storepass {{ keystore_password }}
+    -noprompt
   when: not _p12_stat.stat.exists
   changed_when: true
+  no_log: true
 
 # ── Kubernetes Secret (raw cert files) ────────────────────────────────────────
 

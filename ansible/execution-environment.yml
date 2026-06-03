@@ -6,6 +6,7 @@
 #   - oc CLI       (for oc exec, oc rollout, oc adm, oc wait, oc get, etc.)
 #   - openssl      (for certificate generation in the certificates role)
 #   - ldap-utils   (for ldapadd/ldapsearch in the ldap role)
+#   - java-11      (keytool — creates Java PKCS12 truststores with trustedCertEntry)
 #   - awx.awx      (for awx-bootstrap.yml)
 #
 # Build:
@@ -71,6 +72,7 @@ additional_build_steps:
       | tar -xz -C /usr/local/bin oc kubectl
       && oc version --client
     # Install ldap-utils for ldapadd/ldapsearch used in the ldap role
+    # Install java-11-openjdk-headless for keytool (creates Java PKCS12 truststores)
     - >-
-      RUN microdnf install -y openldap-clients
+      RUN microdnf install -y openldap-clients java-11-openjdk-headless
       && microdnf clean all
