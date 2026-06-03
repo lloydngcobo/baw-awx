@@ -268,6 +268,64 @@
           name: bastudio-svc
   when: deploy_bastudio | default(true) | bool
 
+- name: Create ICMClient route
+  # BAW Case Client browser JS loads resources from /ICMClient/ (no /bas/ prefix).
+  # BAStudio serves the ICMClient EAR at context-root /bas/ICMClient (set by
+  # baw_context_root_prefix variable). HAProxy rewrites /ICMClient → /bas/ICMClient.
+  # Without this route, the Case Client gets 503 → STP "not reachable" error.
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: icmclient-route
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+        annotations:
+          haproxy.router.openshift.io/rewrite-target: /bas/ICMClient
+      spec:
+        host: "{{ baw_hostname }}"
+        path: /ICMClient
+        port:
+          targetPort: http
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+        to:
+          kind: Service
+          name: bastudio-svc
+  when: deploy_bastudio | default(true) | bool
+
+- name: Create CaseBuilder route
+  # BAW Case Builder also needs its own route since the context root is /bas/CaseBuilder
+  # but browsers access /CaseBuilder/. Same rewrite pattern as ICMClient.
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: casebuilder-route
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: baw
+        annotations:
+          haproxy.router.openshift.io/rewrite-target: /bas/CaseBuilder
+      spec:
+        host: "{{ baw_hostname }}"
+        path: /CaseBuilder
+        port:
+          targetPort: http
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+        to:
+          kind: Service
+          name: bastudio-svc
+  when: deploy_bastudio | default(true) | bool
+
 - name: Create BAW Runtime route
   kubernetes.core.k8s:
     state: present
