@@ -426,15 +426,15 @@
 
             Two auth concerns handled here:
               1. Connection authentication (JMSAuthAlias -> jms_user/jms_password):
-                 jms_user is overridden to a DEDICATED "jmsserver" account that exists
-                 ONLY in this basicRegistry. Reusing the LDAP-backed admin_user (bawadmin)
-                 caused a federation conflict -> CWWKM3009E "user bawadmin is not
-                 authenticated to access Liberty messaging".
+                 jms_user = ${admin_user} (bawadmin) — same as reference. With TDS LDAP +
+                 federatedRepository (LdapRegistry realm, UID-based), bawadmin resolves
+                 cleanly. The previous CWWKM3009E was specific to the old Custom LDAP
+                 (full-DN user IDs causing realm mismatch). The basicRegistry here lets
+                 the JMS auth layer find bawadmin with the local admin_password before
+                 going to LDAP, avoiding any federation lookup for the JMS user.
               2. Authorization (messagingSecurity role workflowPS): granted to BOTH
                  jms_user (connection identity) AND admin_user (the logged-in subject
-                 under which server-internal cache publishes run). Without the admin_user
-                 grant, SEND on cacheTopic fails with CWWKM3010W / CWSIA0069E. Role grant
-                 is authorization-only, so naming bawadmin here creates no auth conflict.
+                 under which server-internal cache publishes run).
           -->
           <server>
             <featureManager>
@@ -442,10 +442,8 @@
               <feature>wasJmsSecurity-1.0</feature>
             </featureManager>
 
-            <!-- Dedicated JMS user (basicRegistry only, NOT in LDAP) -->
-            <variable name="jms_user" value="jmsserver" />
             <basicRegistry realm="defaultWIMFileBasedRealm" id="basicRegistry" ignoreCaseForAuthentication="true">
-              <user name="${jms_user}" password="${jms_password}" />
+              <user name="${admin_user}" password="${admin_password}" />
             </basicRegistry>
 
             <wasJmsEndpoint id="InboundJmsCommsEndpoint" host="*"
@@ -484,7 +482,6 @@
                   <topicPermission topicSpaceRef="cacheTopicSpace"><action>ALL</action></topicPermission>
                   <topicPermission topicSpaceRef="HealthCheckTopicSpace"><action>ALL</action></topicPermission>
                   <topicPermission topicSpaceRef="caseTopicSpace"><action>ALL</action></topicPermission>
-                  <user name="${jms_user}" />
                   <user name="${admin_user}" />
                 </role>
               </messagingSecurity>
@@ -654,9 +651,6 @@
             <federatedRepository>
               <primaryRealm name="LdapRegistry" allowOpIfRepoDown="true">
                 <participatingBaseEntry name="{{ ldap_base_dn }}"/>
-                <!-- Include basicRegistry (realm=defaultWIMFileBasedRealm) so jmsserver
-                     can be found. Base DN must match basicRegistry realm name. -->
-                <participatingBaseEntry name="o=defaultWIMFileBasedRealm"/>
               </primaryRealm>
             </federatedRepository>
           </server>
