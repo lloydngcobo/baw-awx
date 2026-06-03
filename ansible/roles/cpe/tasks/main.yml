@@ -80,7 +80,7 @@
               <connectionManager maxPoolSize="20" minPoolSize="1"/>
             </dataSource>
 
-            <dataSource id="FNOSDOCS" jndiName="FNOSDOCS"
+            <dataSource id="FNDOCSDS" jndiName="FNDOCSDS"
                         type="javax.sql.XADataSource">
               <jdbcDriver libraryRef="PostgreSQLLib"/>
               <properties.postgresql
@@ -92,7 +92,7 @@
               <connectionManager maxPoolSize="20" minPoolSize="1"/>
             </dataSource>
 
-            <dataSource id="FNOSDOCSXA" jndiName="FNOSDOCSXA"
+            <dataSource id="FNDOCSDSXA" jndiName="FNDOCSDSXA"
                         type="javax.sql.XADataSource">
               <jdbcDriver libraryRef="PostgreSQLLib"/>
               <properties.postgresql
@@ -104,7 +104,7 @@
               <connectionManager maxPoolSize="20" minPoolSize="1"/>
             </dataSource>
 
-            <dataSource id="FNOS2DS" jndiName="FNOS2DS"
+            <dataSource id="FNDOSDS" jndiName="FNDOSDS"
                         type="javax.sql.XADataSource">
               <jdbcDriver libraryRef="PostgreSQLLib"/>
               <properties.postgresql
@@ -116,7 +116,7 @@
               <connectionManager maxPoolSize="20" minPoolSize="1"/>
             </dataSource>
 
-            <dataSource id="FNOS2DSXA" jndiName="FNOS2DSXA"
+            <dataSource id="FNDOSDSXA" jndiName="FNDOSDSXA"
                         type="javax.sql.XADataSource">
               <jdbcDriver libraryRef="PostgreSQLLib"/>
               <properties.postgresql
@@ -128,7 +128,7 @@
               <connectionManager maxPoolSize="20" minPoolSize="1"/>
             </dataSource>
 
-            <dataSource id="FNOS3DS" jndiName="FNOS3DS"
+            <dataSource id="FNTOSDS" jndiName="FNTOSDS"
                         type="javax.sql.XADataSource">
               <jdbcDriver libraryRef="PostgreSQLLib"/>
               <properties.postgresql
@@ -140,7 +140,7 @@
               <connectionManager maxPoolSize="20" minPoolSize="1"/>
             </dataSource>
 
-            <dataSource id="FNOS3DSXA" jndiName="FNOS3DSXA"
+            <dataSource id="FNTOSDSXA" jndiName="FNTOSDSXA"
                         type="javax.sql.XADataSource">
               <jdbcDriver libraryRef="PostgreSQLLib"/>
               <properties.postgresql
