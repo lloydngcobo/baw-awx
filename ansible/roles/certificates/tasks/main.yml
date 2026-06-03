@@ -261,7 +261,6 @@
       - "{{ keystore_password }}"
   when: not _p12_stat.stat.exists
   changed_when: true
-  no_log: true
 
 # ── Kubernetes Secret (raw cert files) ────────────────────────────────────────
 
