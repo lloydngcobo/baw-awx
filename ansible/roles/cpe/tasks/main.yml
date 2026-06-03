@@ -36,6 +36,12 @@
 # Mounted at /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/
 # CPE reads these at startup to configure JDBC, LDAP, and SSL.
 
+# ── Liberty config ConfigMap ──────────────────────────────────────────────────
+# Aligned to reference baw-microshift-rhel/install/configmap.yaml.
+# Key differences from reference: env vars for secrets (${env.*}) instead of
+# XOR-encoded passwords; homelab JDBC path; homelab SSO domain.
+# Shared LTPA keys (custom-ltpa.keys) MUST be identical in CPE and ICN for SSO.
+
 - name: Create CPE Liberty config ConfigMap
   kubernetes.core.k8s:
     state: present
@@ -48,159 +54,191 @@
         labels:
           app: baw-cpe
       data:
-        db-datasources.xml: |
+        # PostgreSQL JDBC driver library (jar placed by cpe-init-jdbc init container)
+        PostgreSQLJDBCDriver.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
           <server>
-            <library id="PostgreSQLLib">
-              <fileset dir="/opt/ibm/wlp/usr/shared/resources/db/postgres"
-                       includes="*.jar"/>
+            <library id="PostgreSQLJDBC">
+              <fileset dir="/opt/ibm/wlp/usr/shared/resources/db/postgres" includes="*.jar"/>
             </library>
+          </server>
 
-            <dataSource id="FNGCDDS" jndiName="FNGCDDS"
-                        type="javax.sql.XADataSource">
-              <jdbcDriver libraryRef="PostgreSQLLib"/>
-              <properties.postgresql
-                serverName="{{ postgres_host }}"
-                portNumber="{{ postgres_port }}"
-                databaseName="{{ gcd_db_name }}"
-                user="${env.GCD_DB_USER}"
-                password="${env.GCD_DB_PASS}"/>
-              <connectionManager maxPoolSize="20" minPoolSize="1"/>
+        # GCD datasources — non-XA for reads, XA for 2PC writes (reference pattern)
+        ibm_GCD.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <dataSource id="FNGCDDS" jndiName="FNGCDDS" validationTimeout="15"
+                        isolationLevel="TRANSACTION_READ_COMMITTED" type="javax.sql.DataSource">
+              <jdbcDriver libraryRef="PostgreSQLJDBC"/>
+              <properties.postgresql serverName="{{ postgres_host }}" portNumber="{{ postgres_port }}"
+                databaseName="{{ gcd_db_name }}" user="${env.GCD_DB_USER}" password="${env.GCD_DB_PASS}" ssl="false"/>
+              <connectionManager enableSharingForDirectLookups="false" minPoolSize="0" maxPoolSize="50"
+                maxIdleTime="1m" reapTime="2m" agedTimeout="3m"/>
             </dataSource>
-
-            <dataSource id="FNGCDDSXA" jndiName="FNGCDDSXA"
-                        type="javax.sql.XADataSource">
-              <jdbcDriver libraryRef="PostgreSQLLib"/>
-              <properties.postgresql
-                serverName="{{ postgres_host }}"
-                portNumber="{{ postgres_port }}"
-                databaseName="{{ gcd_db_name }}"
-                user="${env.GCD_DB_USER}"
-                password="${env.GCD_DB_PASS}"/>
-              <connectionManager maxPoolSize="20" minPoolSize="1"/>
-            </dataSource>
-
-            <dataSource id="FNDOCSDS" jndiName="FNDOCSDS"
-                        type="javax.sql.XADataSource">
-              <jdbcDriver libraryRef="PostgreSQLLib"/>
-              <properties.postgresql
-                serverName="{{ postgres_host }}"
-                portNumber="{{ postgres_port }}"
-                databaseName="{{ docs_db_name }}"
-                user="${env.DOCS_DB_USER}"
-                password="${env.DOCS_DB_PASS}"/>
-              <connectionManager maxPoolSize="20" minPoolSize="1"/>
-            </dataSource>
-
-            <dataSource id="FNDOCSDSXA" jndiName="FNDOCSDSXA"
-                        type="javax.sql.XADataSource">
-              <jdbcDriver libraryRef="PostgreSQLLib"/>
-              <properties.postgresql
-                serverName="{{ postgres_host }}"
-                portNumber="{{ postgres_port }}"
-                databaseName="{{ docs_db_name }}"
-                user="${env.DOCS_DB_USER}"
-                password="${env.DOCS_DB_PASS}"/>
-              <connectionManager maxPoolSize="20" minPoolSize="1"/>
-            </dataSource>
-
-            <dataSource id="FNDOSDS" jndiName="FNDOSDS"
-                        type="javax.sql.XADataSource">
-              <jdbcDriver libraryRef="PostgreSQLLib"/>
-              <properties.postgresql
-                serverName="{{ postgres_host }}"
-                portNumber="{{ postgres_port }}"
-                databaseName="{{ dos_db_name }}"
-                user="${env.DOS_DB_USER}"
-                password="${env.DOS_DB_PASS}"/>
-              <connectionManager maxPoolSize="20" minPoolSize="1"/>
-            </dataSource>
-
-            <dataSource id="FNDOSDSXA" jndiName="FNDOSDSXA"
-                        type="javax.sql.XADataSource">
-              <jdbcDriver libraryRef="PostgreSQLLib"/>
-              <properties.postgresql
-                serverName="{{ postgres_host }}"
-                portNumber="{{ postgres_port }}"
-                databaseName="{{ dos_db_name }}"
-                user="${env.DOS_DB_USER}"
-                password="${env.DOS_DB_PASS}"/>
-              <connectionManager maxPoolSize="20" minPoolSize="1"/>
-            </dataSource>
-
-            <dataSource id="FNTOSDS" jndiName="FNTOSDS"
-                        type="javax.sql.XADataSource">
-              <jdbcDriver libraryRef="PostgreSQLLib"/>
-              <properties.postgresql
-                serverName="{{ postgres_host }}"
-                portNumber="{{ postgres_port }}"
-                databaseName="{{ tos_db_name }}"
-                user="${env.TOS_DB_USER}"
-                password="${env.TOS_DB_PASS}"/>
-              <connectionManager maxPoolSize="20" minPoolSize="1"/>
-            </dataSource>
-
-            <dataSource id="FNTOSDSXA" jndiName="FNTOSDSXA"
-                        type="javax.sql.XADataSource">
-              <jdbcDriver libraryRef="PostgreSQLLib"/>
-              <properties.postgresql
-                serverName="{{ postgres_host }}"
-                portNumber="{{ postgres_port }}"
-                databaseName="{{ tos_db_name }}"
-                user="${env.TOS_DB_USER}"
-                password="${env.TOS_DB_PASS}"/>
-              <connectionManager maxPoolSize="20" minPoolSize="1"/>
+            <dataSource id="FNGCDDSXA" jndiName="FNGCDDSXA" validationTimeout="15"
+                        isolationLevel="TRANSACTION_READ_COMMITTED" type="javax.sql.XADataSource" supplementalJDBCTrace="true">
+              <jdbcDriver libraryRef="PostgreSQLJDBC"/>
+              <properties.postgresql serverName="{{ postgres_host }}" portNumber="{{ postgres_port }}"
+                databaseName="{{ gcd_db_name }}" user="${env.GCD_DB_USER}" password="${env.GCD_DB_PASS}" ssl="false"/>
+              <connectionManager enableSharingForDirectLookups="true" minPoolSize="0" maxPoolSize="50"
+                maxIdleTime="1m" reapTime="2m" agedTimeout="3m"/>
             </dataSource>
           </server>
 
-        ldap-registry.xml: |
+        ibm_DOCS.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
           <server>
-            <ldapRegistry id="LDAPUserRegistry"
-              realm="defaultWIMFileBasedRealm"
+            <dataSource id="FNDOCSDS" jndiName="FNDOCSDS" validationTimeout="15"
+                        isolationLevel="TRANSACTION_READ_COMMITTED" type="javax.sql.DataSource">
+              <jdbcDriver libraryRef="PostgreSQLJDBC"/>
+              <properties.postgresql serverName="{{ postgres_host }}" portNumber="{{ postgres_port }}"
+                databaseName="{{ docs_db_name }}" user="${env.DOCS_DB_USER}" password="${env.DOCS_DB_PASS}" ssl="false"/>
+              <connectionManager enableSharingForDirectLookups="false" minPoolSize="0" maxPoolSize="50"
+                maxIdleTime="1m" reapTime="2m" agedTimeout="3m"/>
+            </dataSource>
+            <dataSource id="FNDOCSDSXA" jndiName="FNDOCSDSXA" validationTimeout="15"
+                        isolationLevel="TRANSACTION_READ_COMMITTED" type="javax.sql.XADataSource" supplementalJDBCTrace="true">
+              <jdbcDriver libraryRef="PostgreSQLJDBC"/>
+              <properties.postgresql serverName="{{ postgres_host }}" portNumber="{{ postgres_port }}"
+                databaseName="{{ docs_db_name }}" user="${env.DOCS_DB_USER}" password="${env.DOCS_DB_PASS}" ssl="false"/>
+              <connectionManager enableSharingForDirectLookups="true" minPoolSize="0" maxPoolSize="50"
+                maxIdleTime="1m" reapTime="2m" agedTimeout="3m"/>
+            </dataSource>
+          </server>
+
+        ibm_DOS.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <dataSource id="FNDOSDS" jndiName="FNDOSDS" validationTimeout="15"
+                        isolationLevel="TRANSACTION_READ_COMMITTED" type="javax.sql.DataSource">
+              <jdbcDriver libraryRef="PostgreSQLJDBC"/>
+              <properties.postgresql serverName="{{ postgres_host }}" portNumber="{{ postgres_port }}"
+                databaseName="{{ dos_db_name }}" user="${env.DOS_DB_USER}" password="${env.DOS_DB_PASS}" ssl="false"/>
+              <connectionManager enableSharingForDirectLookups="false" minPoolSize="0" maxPoolSize="50"
+                maxIdleTime="1m" reapTime="2m" agedTimeout="3m"/>
+            </dataSource>
+            <dataSource id="FNDOSDSXA" jndiName="FNDOSDSXA" validationTimeout="15"
+                        isolationLevel="TRANSACTION_READ_COMMITTED" type="javax.sql.XADataSource" supplementalJDBCTrace="true">
+              <jdbcDriver libraryRef="PostgreSQLJDBC"/>
+              <properties.postgresql serverName="{{ postgres_host }}" portNumber="{{ postgres_port }}"
+                databaseName="{{ dos_db_name }}" user="${env.DOS_DB_USER}" password="${env.DOS_DB_PASS}" ssl="false"/>
+              <connectionManager enableSharingForDirectLookups="true" minPoolSize="0" maxPoolSize="50"
+                maxIdleTime="1m" reapTime="2m" agedTimeout="3m"/>
+            </dataSource>
+          </server>
+
+        ibm_TOS.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <dataSource id="FNTOSDS" jndiName="FNTOSDS" validationTimeout="15"
+                        isolationLevel="TRANSACTION_READ_COMMITTED" type="javax.sql.DataSource">
+              <jdbcDriver libraryRef="PostgreSQLJDBC"/>
+              <properties.postgresql serverName="{{ postgres_host }}" portNumber="{{ postgres_port }}"
+                databaseName="{{ tos_db_name }}" user="${env.TOS_DB_USER}" password="${env.TOS_DB_PASS}" ssl="false"/>
+              <connectionManager enableSharingForDirectLookups="false" minPoolSize="0" maxPoolSize="50"
+                maxIdleTime="1m" reapTime="2m" agedTimeout="3m"/>
+            </dataSource>
+            <dataSource id="FNTOSDSXA" jndiName="FNTOSDSXA" validationTimeout="15"
+                        isolationLevel="TRANSACTION_READ_COMMITTED" type="javax.sql.XADataSource" supplementalJDBCTrace="true">
+              <jdbcDriver libraryRef="PostgreSQLJDBC"/>
+              <properties.postgresql serverName="{{ postgres_host }}" portNumber="{{ postgres_port }}"
+                databaseName="{{ tos_db_name }}" user="${env.TOS_DB_USER}" password="${env.TOS_DB_PASS}" ssl="false"/>
+              <connectionManager enableSharingForDirectLookups="true" minPoolSize="0" maxPoolSize="50"
+                maxIdleTime="1m" reapTime="2m" agedTimeout="3m"/>
+            </dataSource>
+          </server>
+
+        # LDAP — reference uses Tivoli DS type + federated repository
+        ibm_ldap_custom_default1.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <ldapRegistry id="defaultldap1"
               host="{{ ldap_host }}"
-              port="{{ ldap_port }}"
               baseDN="{{ ldap_base_dn }}"
+              port="{{ ldap_port }}"
+              ldapType="IBM Tivoli Directory Server"
               bindDN="{{ ldap_bind_dn }}"
-              bindPassword="${env.LDAP_BIND_PASSWORD}"
-              ldapType="Custom"
-              searchTimeout="120s"
-              connectTimeout="30s">
-              <ldapEntityType name="PersonAccount">
-                <rdnProperty name="uid"/>
-                <objectClass>inetOrgPerson</objectClass>
-              </ldapEntityType>
-              <ldapEntityType name="Group">
-                <rdnProperty name="cn"/>
-                <objectClass>groupOfNames</objectClass>
-                <memberAttribute name="member"/>
-              </ldapEntityType>
-              <userFilter
-                filter="(&amp;(uid=%v)(objectclass=inetOrgPerson))"/>
-              <groupFilter
-                filter="(&amp;(cn=%v)(objectclass=groupOfNames))"/>
-              <userIdMap filter="uid"/>
-              <groupIdMap filter="cn"/>
-              <groupMemberIdMap filter="member"/>
+              sslEnabled="false"
+              bindPassword="${env.LDAP_BIND_PASSWORD}">
+              <idsFilters
+                userFilter="(&amp;(uid=%v)(objectclass=person))"
+                groupFilter="(&amp;(cn=%v)(|(objectclass=groupofnames)(objectclass=groupofuniquenames)(objectclass=groupofurls)))"
+                userIdMap="*:uid"
+                groupIdMap="*:cn"
+                groupMemberIdMap="groupofnames:member"/>
             </ldapRegistry>
           </server>
 
-        ssl-config.xml: |
+        ibm_ldap_federated.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
           <server>
-            <keyStore id="defaultKeyStore"
-              location="/shared/tls/pkcs12/server.p12"
-              password="${env.KEYSTORE_PASSWORD}"
-              type="PKCS12"/>
-            <keyStore id="defaultTrustStore"
-              location="/shared/tls/pkcs12/trusts.p12"
-              password="${env.KEYSTORE_PASSWORD}"
-              type="PKCS12"/>
-            <ssl id="defaultSSLConfig"
+            <federatedRepository>
+              <primaryRealm name="LdapRegistry" allowOpIfRepoDown="true">
+                <participatingBaseEntry name="{{ ldap_base_dn }}"/>
+              </primaryRealm>
+            </federatedRepository>
+          </server>
+
+        # SSL — reference pattern with sslDefault pointing to cssSSLSettings
+        ibm_custom-ssl.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <sslDefault sslRef="cssSSLSettings"/>
+            <ssl id="cssSSLSettings"
               keyStoreRef="defaultKeyStore"
               trustStoreRef="defaultTrustStore"
-              sslProtocol="TLSv1.2"/>
-            <sslDefault sslRef="defaultSSLConfig"/>
+              sslProtocol="TLSv1.2,TLSv1.3"/>
+            <keyStore id="defaultKeyStore"
+              location="/shared/tls/pkcs12/server.p12"
+              type="PKCS12"
+              password="${env.KEYSTORE_PASSWORD}"/>
+            <keyStore id="defaultTrustStore"
+              location="/shared/tls/pkcs12/trusts.p12"
+              type="PKCS12"
+              password="${env.KEYSTORE_PASSWORD}"/>
+          </server>
+
+        # LTPA — shared keys required for SSO between CPE and ICN
+        # Both services must use the SAME custom-ltpa.keys or LTPA tokens are rejected
+        ibm_custom-ltpa.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <ltpa
+              keysFileName="${server.config.dir}/resources/security/custom-ltpa.keys"
+              keysPassword="${env.KEYSTORE_PASSWORD}"
+              realm="defaultldap1Realm"
+              expiration="120m" />
+          </server>
+
+        # Shared LTPA keys from reference repo — identical in CPE and ICN
+        custom-ltpa.keys: |
+          #Wed Jun 25 05:42:33 CEST 2025
+          com.ibm.websphere.CreationDate=Wed Jun 25 05\:42\:33 CEST 2025
+          com.ibm.websphere.CreationHost=localhost
+          com.ibm.websphere.ltpa.3DESKey=Bms6ULbxVu+GeUlHua3GyZNYnh9iehiVfAwEtKnDBFw\=
+          com.ibm.websphere.ltpa.PrivateKey=EHJDUf/xpsC31kg0ijfPl5m/kelEOJ9uzu/3zyMUjnlBXU4X0oY/KHxnkfOYnwlWKKuDJlKA41acg59VUYJwMJQMcuDJfNTlqLFfVivbQcxokzDOqxTrbbRP4gBr8Du2kZKQoqib2htD5J4VgY3bU9O01Ssc2ZScHiMZWfC42Oyx65YZHGqQSxMSDI4VlF2WWYp2IWhcLeJOhu/GDNPc8VbxrTO1TejWmVnTtkfxANlv9vn+3dDkOfaTpmRy+zzw6KpReUCscQgOylBMA0X76Kdv3JEGKRcJGCS2bnjb6bnmGBGiVCOuhzSsXQ/bzbdLpTcp1htcLDO2Dwaim7km9WraNVlwZ48Dlc5XPto/DS8\=
+          com.ibm.websphere.ltpa.PublicKey=AMJpYeSavFgbpBBv8QfC9Xe9mxYmivrLbQZJ6mtSipYjIVVxDl20cZOQFZBSFAuG4rEsqFZ5vqVPxqLMXTa3tSLBAPbVWTRqM33kXjLrWL3iiCeYmhp4WS8+/rTtPbQ0Lt6JGjZKkpws1M16fK1zQ27YSUmGyjISTmg5yzQ2PBzjAQAB
+          com.ibm.websphere.ltpa.Realm=defaultldap1Realm
+          com.ibm.websphere.ltpa.version=1.0
+
+        http-session.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <httpSession invalidationTimeout="120m" cloneId="the-session" idReuse="true" />
+            <webAppSecurity
+              ssoDomainNames="{{ ingress_domain }}|svc.cluster.local"
+              preserveFullyQualifiedReferrerUrl="true" />
+          </server>
+
+        ibm_CORS.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <cors domain="/contentapi/rest/share/v1"
+              allowedOrigins="*"
+              allowedMethods="GET, DELETE, PUT, POST, OPTIONS"
+              allowedHeaders="Connection,Pragma,Cache-Control,Navigator-Client-Build,XSRFtoken,ECM-XSRF-Token,Origin,User-Agent,Content-Type,Content-Length,Navigator-Client-Identity,Accept-Control-Request-Method,Accept-Control-Request-Headers,Accept,Referer,Accept-Encoding,Accept-Language,DNT,Host,Cache-control,Cookie,auth-token-realm,Authorization,Sec-Fetch-Site,Sec-Fetch-Mode"
+              exposeHeaders="Content-Length,Content_Type,Content-Language,X-Powered-By,Date,Allow,Transfer-Encoding,DNT,Access-Control-Allow-Credentials,Access-Control-Allow-Headers,Access-Control-Allow-Max-Age,Access-Control-Allow-Methods,Access-Control-Allow-Origin,Access-Control-Expose-Headers,Connection,Cache-control,Cookie,Expires,Pragma,Set-Cookie"
+              maxAge="86400" />
           </server>
 
 # ── Storage ───────────────────────────────────────────────────────────────────
@@ -349,10 +387,10 @@
                     valueFrom:
                       fieldRef:
                         fieldPath: status.podIP
-                  - name: JVM_HEAP_XMS
-                    value: "512m"
-                  - name: JVM_HEAP_XMX
-                    value: "1536m"
+                  - name: JVM_INITIAL_HEAP_PERCENTAGE
+                    value: "18"
+                  - name: JVM_MAX_HEAP_PERCENTAGE
+                    value: "33"
                 resources:
                   requests:
                     memory: 1Gi
@@ -391,17 +429,43 @@
                   # PostgreSQL JDBC driver — populated by cpe-init-jdbc init container
                   - name: jdbc-drivers
                     mountPath: /opt/ibm/wlp/usr/shared/resources/db/postgres
-                  # Mount each Liberty override file individually (subPath) so the
-                  # overrides directory stays writable — CPE startup script checks it.
+                  # Mount each Liberty override file individually (subPath) — reference pattern
                   - name: liberty-config
-                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/db-datasources.xml
-                    subPath: db-datasources.xml
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/PostgreSQLJDBCDriver.xml
+                    subPath: PostgreSQLJDBCDriver.xml
                   - name: liberty-config
-                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ldap-registry.xml
-                    subPath: ldap-registry.xml
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ibm_GCD.xml
+                    subPath: ibm_GCD.xml
                   - name: liberty-config
-                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ssl-config.xml
-                    subPath: ssl-config.xml
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ibm_DOCS.xml
+                    subPath: ibm_DOCS.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ibm_DOS.xml
+                    subPath: ibm_DOS.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ibm_TOS.xml
+                    subPath: ibm_TOS.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ibm_ldap_custom_default1.xml
+                    subPath: ibm_ldap_custom_default1.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ibm_ldap_federated.xml
+                    subPath: ibm_ldap_federated.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ibm_custom-ssl.xml
+                    subPath: ibm_custom-ssl.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ibm_custom-ltpa.xml
+                    subPath: ibm_custom-ltpa.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/resources/security/custom-ltpa.keys
+                    subPath: custom-ltpa.keys
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/http-session.xml
+                    subPath: http-session.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ibm_CORS.xml
+                    subPath: ibm_CORS.xml
                   - name: tls
                     mountPath: /shared/tls/pkcs12
             volumes:
