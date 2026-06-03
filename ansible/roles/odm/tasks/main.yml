@@ -3,7 +3,7 @@
 # Deploys IBM Operational Decision Manager (ODM) 9.0.0.0
 # Four components: Decision Center, Server Console, Server Runtime, Decision Runner.
 # Only runs when deploy_odm: true.
-# Requires: PostgreSQL, LDAP running. Uses odm_db database.
+# Requires: PostgreSQL, LDAP running. Uses odm_db database (created in postgresql role).
 # Ref: baw-microshift-rhel/install/odm/
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
@@ -20,9 +20,9 @@
         labels:
           app: odm
       stringData:
-        DB_PASSWORD:       "{{ odm_db_pass }}"
+        DB_PASSWORD:        "{{ odm_db_pass }}"
         LDAP_BIND_PASSWORD: "{{ ldap_bind_password }}"
-        KEYSTORE_PASSWORD: "{{ keystore_password }}"
+        KEYSTORE_PASSWORD:  "{{ keystore_password }}"
   no_log: true
 
 # ── ConfigMap ─────────────────────────────────────────────────────────────────
@@ -39,29 +39,117 @@
         labels:
           app: odm
       data:
-        DB_TYPE:           "postgresql"
-        DB_SERVER_NAME:    "{{ postgres_host }}"
-        DB_PORT_NUMBER:    "{{ postgres_port }}"
-        DB_NAME:           "{{ odm_db_name }}"
-        DB_USER:           "{{ odm_db_user }}"
-        LDAP_SERVER:       "ldap://{{ ldap_host }}:{{ ldap_port }}"
-        LDAP_BASE_DN:      "{{ ldap_base_dn }}"
-        LDAP_BIND_DN:      "{{ ldap_bind_dn }}"
-        LDAP_USER_FILTER:  "(&(uid=%v)(objectclass=inetOrgPerson))"
-        LDAP_GROUP_FILTER: "(&(cn=%v)(objectclass=groupOfNames))"
-        SAMPLE_MODE:       "false"
-        TZ:                "{{ timezone }}"
+        DB_TYPE:        "postgresql"
+        DB_SERVER_NAME: "{{ postgres_host }}"
+        DB_PORT_NUMBER: "{{ postgres_port }}"
+        DB_NAME:        "{{ odm_db_name }}"
+        DB_USER:        "{{ odm_db_user }}"
+        LDAP_SERVER:    "ldap://{{ ldap_host }}:{{ ldap_port }}"
+        LDAP_BASE_DN:   "{{ ldap_base_dn }}"
+        LDAP_BIND_DN:   "{{ ldap_bind_dn }}"
+        SAMPLE:         "false"
+        TZ:             "{{ timezone }}"
+
+- name: Create ODM Liberty config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: odm-liberty-config
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: odm
+      data:
+        ibm_ldap_custom_default1.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <ldapRegistry id="defaultldap1"
+              host="{{ ldap_host }}"
+              baseDN="{{ ldap_base_dn }}"
+              port="{{ ldap_port }}"
+              ldapType="IBM Tivoli Directory Server"
+              bindDN="{{ ldap_bind_dn }}"
+              sslEnabled="false"
+              bindPassword="${env.LDAP_BIND_PASSWORD}">
+              <idsFilters
+                userFilter="(&amp;(uid=%v)(objectclass=person))"
+                groupFilter="(&amp;(cn=%v)(|(objectclass=groupofnames)(objectclass=groupofuniquenames)(objectclass=groupofurls)))"
+                userIdMap="*:uid"
+                groupIdMap="*:cn"
+                groupMemberIdMap="groupofnames:member"/>
+            </ldapRegistry>
+          </server>
+
+        ibm_ldap_federated.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <federatedRepository>
+              <primaryRealm name="LdapRegistry" allowOpIfRepoDown="true">
+                <participatingBaseEntry name="{{ ldap_base_dn }}"/>
+              </primaryRealm>
+            </federatedRepository>
+          </server>
+
+        ibm_custom-ssl.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <sslDefault sslRef="cssSSLSettings"/>
+            <ssl id="cssSSLSettings"
+              keyStoreRef="defaultKeyStore"
+              trustStoreRef="defaultTrustStore"
+              sslProtocol="TLSv1.2,TLSv1.3"/>
+            <keyStore id="defaultKeyStore"
+              location="/shared/tls/pkcs12/server.p12"
+              type="PKCS12"
+              password="${env.KEYSTORE_PASSWORD}"/>
+            <keyStore id="defaultTrustStore"
+              location="/shared/tls/pkcs12/trusts.p12"
+              type="PKCS12"
+              password="${env.KEYSTORE_PASSWORD}"/>
+          </server>
+
+        ibm_custom-ltpa.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <ltpa
+              keysFileName="${server.config.dir}/resources/security/custom-ltpa.keys"
+              keysPassword="${env.KEYSTORE_PASSWORD}"
+              realm="defaultldap1Realm"
+              expiration="120m" />
+          </server>
+
+        # Shared LTPA keys — must be identical to CPE/ICN/BAStudio for SSO
+        custom-ltpa.keys: |
+          #Wed Jun 25 05:42:33 CEST 2025
+          com.ibm.websphere.CreationDate=Wed Jun 25 05\:42\:33 CEST 2025
+          com.ibm.websphere.CreationHost=localhost
+          com.ibm.websphere.ltpa.3DESKey=Bms6ULbxVu+GeUlHua3GyZNYnh9iehiVfAwEtKnDBFw\=
+          com.ibm.websphere.ltpa.PrivateKey=EHJDUf/xpsC31kg0ijfPl5m/kelEOJ9uzu/3zyMUjnlBXU4X0oY/KHxnkfOYnwlWKKuDJlKA41acg59VUYJwMJQMcuDJfNTlqLFfVivbQcxokzDOqxTrbbRP4gBr8Du2kZKQoqib2htD5J4VgY3bU9O01Ssc2ZScHiMZWfC42Oyx65YZHGqQSxMSDI4VlF2WWYp2IWhcLeJOhu/GDNPc8VbxrTO1TejWmVnTtkfxANlv9vn+3dDkOfaTpmRy+zzw6KpReUCscQgOylBMA0X76Kdv3JEGKRcJGCS2bnjb6bnmGBGiVCOuhzSsXQ/bzbdLpTcp1htcLDO2Dwaim7km9WraNVlwZ48Dlc5XPto/DS8\=
+          com.ibm.websphere.ltpa.PublicKey=AMJpYeSavFgbpBBv8QfC9Xe9mxYmivrLbQZJ6mtSipYjIVVxDl20cZOQFZBSFAuG4rEsqFZ5vqVPxqLMXTa3tSLBAPbVWTRqM33kXjLrWL3iiCeYmhp4WS8+/rTtPbQ0Lt6JGjZKkpws1M16fK1zQ27YSUmGyjISTmg5yzQ2PBzjAQAB
+          com.ibm.websphere.ltpa.Realm=defaultldap1Realm
+          com.ibm.websphere.ltpa.version=1.0
+
+        http-session.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <httpSession invalidationTimeout="120m" cloneId="the-session" idReuse="true" />
+            <webAppSecurity
+              ssoDomainNames="{{ ingress_domain }}|svc.cluster.local"
+              preserveFullyQualifiedReferrerUrl="true" />
+          </server>
 
 # ── Storage ───────────────────────────────────────────────────────────────────
 
-- name: Create ODM Decision Center PVC
+- name: Create ODM shared PVC
   kubernetes.core.k8s:
     state: present
     definition:
       apiVersion: v1
       kind: PersistentVolumeClaim
       metadata:
-        name: odm-dc-pvc
+        name: odm-pvc
         namespace: "{{ baw_namespace }}"
         labels:
           app: odm
@@ -69,7 +157,7 @@
         accessModes: [ReadWriteMany]
         resources:
           requests:
-            storage: 5Gi
+            storage: 10Gi
         storageClassName: "{{ storage_class_name }}"
 
 # ── 1. Decision Center ────────────────────────────────────────────────────────
@@ -127,6 +215,11 @@
                       secretKeyRef:
                         name: odm-secret
                         key: LDAP_BIND_PASSWORD
+                  - name: KEYSTORE_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: odm-secret
+                        key: KEYSTORE_PASSWORD
                 resources:
                   requests:
                     memory: 1Gi
@@ -134,6 +227,15 @@
                   limits:
                     memory: 3Gi
                     cpu: "2"
+                securityContext:
+                  capabilities:
+                    drop: ["ALL"]
+                  privileged: false
+                  runAsNonRoot: true
+                  readOnlyRootFilesystem: false
+                  allowPrivilegeEscalation: false
+                  seccompProfile:
+                    type: RuntimeDefault
                 readinessProbe:
                   tcpSocket:
                     port: 9453
@@ -141,20 +243,44 @@
                   periodSeconds: 15
                   failureThreshold: 20
                 volumeMounts:
-                  - name: data
-                    mountPath: /opt/ibm/odm/decisioncenter
-                  - name: tls
-                    mountPath: /opt/ibm/odm/shared/tls
+                  - name: odm-pvc
+                    mountPath: /config/dbdata
+                    subPath: decisioncenter/dbdata
+                  - name: shared-ssl
+                    mountPath: /shared/tls/pkcs12
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_ldap_custom_default1.xml
+                    subPath: ibm_ldap_custom_default1.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_ldap_federated.xml
+                    subPath: ibm_ldap_federated.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_custom-ssl.xml
+                    subPath: ibm_custom-ssl.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_custom-ltpa.xml
+                    subPath: ibm_custom-ltpa.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/resources/security/custom-ltpa.keys
+                    subPath: custom-ltpa.keys
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/http-session.xml
+                    subPath: http-session.xml
             volumes:
-              - name: data
+              - name: odm-pvc
                 persistentVolumeClaim:
-                  claimName: odm-dc-pvc
-              - name: tls
+                  claimName: odm-pvc
+              - name: shared-ssl
                 configMap:
                   name: shared-ssl-config
                   items:
-                    - key: ca.crt
-                      path: ca.crt
+                    - key: server.p12
+                      path: server.p12
+                    - key: trusts.p12
+                      path: trusts.p12
+              - name: odm-liberty-config
+                configMap:
+                  name: odm-liberty-config
 
 - name: Create ODM Decision Center Service
   kubernetes.core.k8s:
@@ -235,6 +361,11 @@
                       secretKeyRef:
                         name: odm-secret
                         key: LDAP_BIND_PASSWORD
+                  - name: KEYSTORE_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: odm-secret
+                        key: KEYSTORE_PASSWORD
                 resources:
                   requests:
                     memory: 512Mi
@@ -242,12 +373,60 @@
                   limits:
                     memory: 2Gi
                     cpu: "2"
+                securityContext:
+                  capabilities:
+                    drop: ["ALL"]
+                  privileged: false
+                  runAsNonRoot: true
+                  readOnlyRootFilesystem: false
+                  allowPrivilegeEscalation: false
+                  seccompProfile:
+                    type: RuntimeDefault
                 readinessProbe:
                   tcpSocket:
                     port: 9443
                   initialDelaySeconds: 60
                   periodSeconds: 15
                   failureThreshold: 20
+                volumeMounts:
+                  - name: odm-pvc
+                    mountPath: /config/dbdata
+                    subPath: decisionserverconsole/dbdata
+                  - name: shared-ssl
+                    mountPath: /shared/tls/pkcs12
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_ldap_custom_default1.xml
+                    subPath: ibm_ldap_custom_default1.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_ldap_federated.xml
+                    subPath: ibm_ldap_federated.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_custom-ssl.xml
+                    subPath: ibm_custom-ssl.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_custom-ltpa.xml
+                    subPath: ibm_custom-ltpa.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/resources/security/custom-ltpa.keys
+                    subPath: custom-ltpa.keys
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/http-session.xml
+                    subPath: http-session.xml
+            volumes:
+              - name: odm-pvc
+                persistentVolumeClaim:
+                  claimName: odm-pvc
+              - name: shared-ssl
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: server.p12
+                      path: server.p12
+                    - key: trusts.p12
+                      path: trusts.p12
+              - name: odm-liberty-config
+                configMap:
+                  name: odm-liberty-config
 
 - name: Create ODM Decision Server Console Service
   kubernetes.core.k8s:
@@ -328,6 +507,14 @@
                       secretKeyRef:
                         name: odm-secret
                         key: LDAP_BIND_PASSWORD
+                  - name: KEYSTORE_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: odm-secret
+                        key: KEYSTORE_PASSWORD
+                  # DSR must register with DSC — use internal svc name
+                  - name: DECISIONSERVERCONSOLE_NAME
+                    value: "odm-dsc-svc.{{ baw_namespace }}.svc.cluster.local"
                 resources:
                   requests:
                     memory: 512Mi
@@ -335,12 +522,60 @@
                   limits:
                     memory: 2Gi
                     cpu: "2"
+                securityContext:
+                  capabilities:
+                    drop: ["ALL"]
+                  privileged: false
+                  runAsNonRoot: true
+                  readOnlyRootFilesystem: false
+                  allowPrivilegeEscalation: false
+                  seccompProfile:
+                    type: RuntimeDefault
                 readinessProbe:
                   tcpSocket:
                     port: 9443
                   initialDelaySeconds: 60
                   periodSeconds: 15
                   failureThreshold: 20
+                volumeMounts:
+                  - name: odm-pvc
+                    mountPath: /config/dbdata
+                    subPath: decisionserverruntime/dbdata
+                  - name: shared-ssl
+                    mountPath: /shared/tls/pkcs12
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_ldap_custom_default1.xml
+                    subPath: ibm_ldap_custom_default1.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_ldap_federated.xml
+                    subPath: ibm_ldap_federated.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_custom-ssl.xml
+                    subPath: ibm_custom-ssl.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_custom-ltpa.xml
+                    subPath: ibm_custom-ltpa.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/resources/security/custom-ltpa.keys
+                    subPath: custom-ltpa.keys
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/http-session.xml
+                    subPath: http-session.xml
+            volumes:
+              - name: odm-pvc
+                persistentVolumeClaim:
+                  claimName: odm-pvc
+              - name: shared-ssl
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: server.p12
+                      path: server.p12
+                    - key: trusts.p12
+                      path: trusts.p12
+              - name: odm-liberty-config
+                configMap:
+                  name: odm-liberty-config
 
 - name: Create ODM Decision Server Runtime Service
   kubernetes.core.k8s:
@@ -421,6 +656,11 @@
                       secretKeyRef:
                         name: odm-secret
                         key: LDAP_BIND_PASSWORD
+                  - name: KEYSTORE_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: odm-secret
+                        key: KEYSTORE_PASSWORD
                 resources:
                   requests:
                     memory: 512Mi
@@ -428,12 +668,60 @@
                   limits:
                     memory: 1Gi
                     cpu: "1"
+                securityContext:
+                  capabilities:
+                    drop: ["ALL"]
+                  privileged: false
+                  runAsNonRoot: true
+                  readOnlyRootFilesystem: false
+                  allowPrivilegeEscalation: false
+                  seccompProfile:
+                    type: RuntimeDefault
                 readinessProbe:
                   tcpSocket:
                     port: 9443
                   initialDelaySeconds: 60
                   periodSeconds: 15
                   failureThreshold: 20
+                volumeMounts:
+                  - name: odm-pvc
+                    mountPath: /config/dbdata
+                    subPath: decisionrunner/dbdata
+                  - name: shared-ssl
+                    mountPath: /shared/tls/pkcs12
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_ldap_custom_default1.xml
+                    subPath: ibm_ldap_custom_default1.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_ldap_federated.xml
+                    subPath: ibm_ldap_federated.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_custom-ssl.xml
+                    subPath: ibm_custom-ssl.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/ibm_custom-ltpa.xml
+                    subPath: ibm_custom-ltpa.xml
+                  - name: odm-liberty-config
+                    mountPath: /config/resources/security/custom-ltpa.keys
+                    subPath: custom-ltpa.keys
+                  - name: odm-liberty-config
+                    mountPath: /config/configDropins/overrides/http-session.xml
+                    subPath: http-session.xml
+            volumes:
+              - name: odm-pvc
+                persistentVolumeClaim:
+                  claimName: odm-pvc
+              - name: shared-ssl
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: server.p12
+                      path: server.p12
+                    - key: trusts.p12
+                      path: trusts.p12
+              - name: odm-liberty-config
+                configMap:
+                  name: odm-liberty-config
 
 - name: Create ODM Decision Runner Service
   kubernetes.core.k8s:
@@ -476,6 +764,7 @@
 - name: ODM summary
   ansible.builtin.debug:
     msg:
-      - "ODM Decision Center  : https://odm-dc-svc.{{ baw_namespace }}.svc.cluster.local:9453"
-      - "ODM Decision Runtime : https://odm-dsr-svc.{{ baw_namespace }}.svc.cluster.local:9443"
-      - "ODM Decision Center URL : https://{{ baw_hostname }}/odm/decisioncenter"
+      - "ODM Decision Center     : https://{{ baw_hostname }}/decisioncenter"
+      - "ODM Decision Server     : https://{{ baw_hostname }}/res"
+      - "ODM Decision Service    : https://{{ baw_hostname }}/DecisionService"
+      - "ODM Decision Runner     : https://{{ baw_hostname }}/DecisionRunner"

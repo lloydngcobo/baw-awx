@@ -304,36 +304,49 @@
 # roles or tablespaces. Use -U postgres (local peer auth) for DDL.
 
 - name: Create App Engine database (postgres superuser)
-  ansible.builtin.shell: >
-    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c
-    "psql -U postgres -d postgres -tAc
-    \"SELECT 1 FROM pg_database WHERE datname='{{ aae_db_name }}'\"
-    | grep -q 1 && echo EXISTS ||
-    ( mkdir -p /var/lib/pgsql/data/{{ aae_db_name }};
-    psql -U postgres -d postgres
-    -c \"CREATE ROLE {{ aae_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ aae_db_pass }}'\"
-    -c \"CREATE TABLESPACE {{ aae_db_name }}_tbs OWNER {{ aae_db_user }} LOCATION '/var/lib/pgsql/data/{{ aae_db_name }}'\"
-    -c \"CREATE DATABASE {{ aae_db_name }} OWNER {{ aae_db_user }} TABLESPACE {{ aae_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\"
-    -c \"GRANT ALL ON DATABASE {{ aae_db_name }} TO {{ aae_db_user }}\"
-    && echo CREATED )"
+  ansible.builtin.shell: |
+    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
+      psql -U postgres -d postgres -tAc \
+        \"SELECT 1 FROM pg_database WHERE datname='{{ aae_db_name }}'\" \
+        | grep -q 1 && echo EXISTS || (
+        mkdir -p /var/lib/pgsql/data/{{ aae_db_name }}
+        psql -U postgres -d postgres \
+          -c \"CREATE ROLE {{ aae_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ aae_db_pass }}'\" \
+          -c \"CREATE TABLESPACE {{ aae_db_name }}_tbs OWNER {{ aae_db_user }} LOCATION '/var/lib/pgsql/data/{{ aae_db_name }}'\" \
+          -c \"CREATE DATABASE {{ aae_db_name }} OWNER {{ aae_db_user }} TABLESPACE {{ aae_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
+          -c \"GRANT ALL ON DATABASE {{ aae_db_name }} TO {{ aae_db_user }}\"
+        psql -U postgres -d {{ aae_db_name }} \
+          -c \"CREATE SCHEMA IF NOT EXISTS {{ aae_db_user }} AUTHORIZATION {{ aae_db_user }}\" \
+          -c \"GRANT ALL ON SCHEMA {{ aae_db_user }} TO {{ aae_db_user }}\" \
+          -c \"ALTER DEFAULT PRIVILEGES IN SCHEMA {{ aae_db_user }} GRANT ALL ON TABLES TO {{ aae_db_user }}\" \
+          -c \"ALTER DEFAULT PRIVILEGES IN SCHEMA {{ aae_db_user }} GRANT ALL ON SEQUENCES TO {{ aae_db_user }}\" \
+          -c \"ALTER DATABASE {{ aae_db_name }} SET search_path TO {{ aae_db_user }}\"
+        echo CREATED)"
   register: _aae
   changed_when: "'CREATED' in _aae.stdout"
   no_log: true
   when: deploy_app_engine | default(false) | bool
 
 - name: Create ODM database (postgres superuser)
-  ansible.builtin.shell: >
-    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c
-    "psql -U postgres -d postgres -tAc
-    \"SELECT 1 FROM pg_database WHERE datname='{{ odm_db_name }}'\"
-    | grep -q 1 && echo EXISTS ||
-    ( mkdir -p /var/lib/pgsql/data/{{ odm_db_name }};
-    psql -U postgres -d postgres
-    -c \"CREATE ROLE {{ odm_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ odm_db_pass }}'\"
-    -c \"CREATE TABLESPACE {{ odm_db_name }}_tbs OWNER {{ odm_db_user }} LOCATION '/var/lib/pgsql/data/{{ odm_db_name }}'\"
-    -c \"CREATE DATABASE {{ odm_db_name }} OWNER {{ odm_db_user }} TABLESPACE {{ odm_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\"
-    -c \"GRANT ALL ON DATABASE {{ odm_db_name }} TO {{ odm_db_user }}\"
-    && echo CREATED )"
+  ansible.builtin.shell: |
+    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
+      psql -U postgres -d postgres -tAc \
+        \"SELECT 1 FROM pg_database WHERE datname='{{ odm_db_name }}'\" \
+        | grep -q 1 && echo EXISTS || (
+        mkdir -p /var/lib/pgsql/data/{{ odm_db_name }}
+        psql -U postgres -d postgres \
+          -c \"CREATE ROLE {{ odm_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ odm_db_pass }}'\" \
+          -c \"CREATE TABLESPACE {{ odm_db_name }}_tbs OWNER {{ odm_db_user }} LOCATION '/var/lib/pgsql/data/{{ odm_db_name }}'\" \
+          -c \"CREATE DATABASE {{ odm_db_name }} OWNER {{ odm_db_user }} TABLESPACE {{ odm_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
+          -c \"GRANT ALL ON DATABASE {{ odm_db_name }} TO {{ odm_db_user }}\"
+        psql -U postgres -d {{ odm_db_name }} \
+          -c \"CREATE SCHEMA IF NOT EXISTS {{ odm_db_user }} AUTHORIZATION {{ odm_db_user }}\" \
+          -c \"GRANT ALL ON SCHEMA {{ odm_db_user }} TO {{ odm_db_user }}\" \
+          -c \"ALTER DEFAULT PRIVILEGES IN SCHEMA {{ odm_db_user }} GRANT ALL ON TABLES TO {{ odm_db_user }}\" \
+          -c \"ALTER DEFAULT PRIVILEGES IN SCHEMA {{ odm_db_user }} GRANT ALL ON SEQUENCES TO {{ odm_db_user }}\" \
+          -c \"ALTER DEFAULT PRIVILEGES IN SCHEMA {{ odm_db_user }} GRANT ALL ON FUNCTIONS TO {{ odm_db_user }}\" \
+          -c \"ALTER DATABASE {{ odm_db_name }} SET search_path TO {{ odm_db_user }}\"
+        echo CREATED)"
   register: _odm_db
   changed_when: "'CREATED' in _odm_db.stdout"
   no_log: true
