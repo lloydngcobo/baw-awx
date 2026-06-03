@@ -654,9 +654,9 @@
             <federatedRepository>
               <primaryRealm name="LdapRegistry" allowOpIfRepoDown="true">
                 <participatingBaseEntry name="{{ ldap_base_dn }}"/>
-                <!-- Include basicRegistry so jmsserver (JMS bus user) can be found.
-                     Without this Liberty only looks in LDAP → CWIML4537E on jmsserver. -->
-                <participatingBaseEntry name="o=basicRegistry"/>
+                <!-- Include basicRegistry (realm=defaultWIMFileBasedRealm) so jmsserver
+                     can be found. Base DN must match basicRegistry realm name. -->
+                <participatingBaseEntry name="o=defaultWIMFileBasedRealm"/>
               </primaryRealm>
             </federatedRepository>
           </server>
