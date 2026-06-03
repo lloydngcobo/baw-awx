@@ -13,3 +13,7 @@ __pycache__/
 # Editor
 .vscode/
 *.swp
+
+# Local debug artifacts
+*.har
+*.log
