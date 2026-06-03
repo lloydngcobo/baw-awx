@@ -47,6 +47,7 @@
         LDAP_BIND_PASSWORD:          "{{ ldap_bind_password }}"
         KEYSTORE_PASSWORD:           "{{ keystore_password }}"
         BASTUDIO_OIDC_CLIENT_SECRET: "{{ bastudio_oidc_client_secret }}"
+        CPE_ADMIN_PASSWORD:          "{{ cpe_admin_password }}"
   no_log: true
 
 # ── Liberty config overrides ──────────────────────────────────────────────────
@@ -156,6 +157,10 @@
 
             <!-- ── JMS (single-server: loopback) ─────────────── -->
             <variable name="jms_server_host"       value="127.0.0.1"/>
+
+            <!-- ── CPE credentials for FileNetAdminAlias (cpe-auth.xml) ── -->
+            <variable name="CPE_USERNAME"          value="{{ cpe_admin_user }}"/>
+            <variable name="CPE_PASSWORD"          value="${env.CPE_ADMIN_PASSWORD}"/>
           </server>
 
         datasource.xml: |
@@ -509,6 +514,115 @@
           com.ibm.websphere.ltpa.PublicKey=AMJpYeSavFgbpBBv8QfC9Xe9mxYmivrLbQZJ6mtSipYjIVVxDl20cZOQFZBSFAuG4rEsqFZ5vqVPxqLMXTa3tSLBAPbVWTRqM33kXjLrWL3iiCeYmhp4WS8+/rTtPbQ0Lt6JGjZKkpws1M16fK1zQ27YSUmGyjISTmg5yzQ2PBzjAQAB
           com.ibm.websphere.ltpa.Realm=defaultldap1Realm
           com.ibm.websphere.ltpa.version=1.0
+
+        # ── CaseBuilder / FileNet support files ───────────────────────────────
+        # Ref: baw-microshift-rhel/install/bas/bastudio-configmap.yaml
+
+        oidc-rp.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!--
+            Override the image-default oidc-rp.xml to add authFilter exclusions for
+            CaseBuilder and CaseManager paths. Without these exclusions OIDC intercepts
+            /bas/CaseBuilder requests, replacing the Subject with an OIDC-only token.
+            The FileNet WSI client then finds no UsernamePassword/LTPA credentials in
+            the Subject and throws FNRCE0019 → "Something went wrong" on CaseBuilder load.
+            Exclusion forces Basic+LTPA auth for these paths so CPE WSI calls succeed.
+          -->
+          <server>
+            <featureManager>
+              <feature>openidConnectClient-1.0</feature>
+            </featureManager>
+            <oidcClientWebapp contextPath="/bas/oidcclient"/>
+            <openidConnectClient id="umsClient"
+              isClientSideRedirectSupported="false"
+              accessTokenInLtpaCookie="true"
+              mapIdentityToRegistryUser="true"
+              redirectToRPHostAndPort="https://{{ baw_hostname }}"
+              authorizationEndpointUrl="https://{{ baw_hostname }}/oidc/endpoint/ums/authorize"
+              clientId="${client_id}" clientSecret="${client_secret}"
+              tokenEndpointUrl="https://ums-svc.{{ baw_namespace }}.svc.cluster.local:9443/oidc/endpoint/ums/token"
+              signatureAlgorithm="RS256"
+              jwkEndpointUrl="https://ums-svc.{{ baw_namespace }}.svc.cluster.local:9443/oidc/endpoint/ums/jwk"
+              validationEndpointUrl="https://ums-svc.{{ baw_namespace }}.svc.cluster.local:9443/oidc/endpoint/ums/introspect"
+              issuerIdentifier="https://{{ baw_hostname }}/oidc/endpoint/ums"
+              inboundPropagation="supported"
+              audiences="ALL_AUTHENTICATED_USERS"
+              tokenReuse="true"
+              scope="openid profile email">
+              <authFilter id="basicAuthFilter">
+                <requestHeader id="basicAuth" name="Authorization" value="Basic" matchType="notcontain"/>
+                <requestUrl id="excludeCaseBuilder"  urlPattern="/bas/CaseBuilder"  matchType="notContain"/>
+                <requestUrl id="excludeCaseManager"  urlPattern="/bas/CaseManager"  matchType="notContain"/>
+                <requestUrl id="excludeCaseRest"     urlPattern="/CASEREST"         matchType="notContain"/>
+                <requestUrl id="excludeP8jaxrs"      urlPattern="/p8/CE/3.0"        matchType="notContain"/>
+              </authFilter>
+            </openidConnectClient>
+          </server>
+
+        case-libs.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!--
+            Adds FileNet JARs (Jace, pe, pe3pt, peResources) to Liberty classloaders
+            used by CaseBuilder, CaseManager and CaseDocs servlets.
+            Without these: NoClassDefFoundError: filenet.vw.api.VWException on load.
+          -->
+          <server>
+            <library id="TeamworksLib">
+              <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/BPM/Lombardi/lib" includes="commons-logging.jar"/>
+              <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/BPM/FileNet/lib" includes="Jace.jar"/>
+              <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/BPM/FileNet/lib" includes="pe.jar"/>
+              <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/BPM/FileNet/lib" includes="pe3pt.jar"/>
+              <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/BPM/FileNet/lib" includes="peResources.jar"/>
+            </library>
+            <library id="FileNetCaseLib">
+              <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/BPM/Lombardi/lib" includes="commons-logging.jar"/>
+              <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/BPM/FileNet/lib" includes="Jace.jar"/>
+              <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/BPM/FileNet/lib" includes="pe.jar"/>
+              <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/BPM/FileNet/lib" includes="pe3pt.jar"/>
+              <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/BPM/FileNet/lib" includes="peResources.jar"/>
+            </library>
+            <library id="FileNetCaseTeamworksLib">
+              <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/BPM/Lombardi/lib" includes="commons-logging.jar"/>
+              <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/BPM/FileNet/lib" includes="Jace.jar"/>
+              <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/BPM/FileNet/lib" includes="pe.jar"/>
+              <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/BPM/FileNet/lib" includes="pe3pt.jar"/>
+              <fileset dir="/opt/ibm/wlp/ibmProcessServer/lib/BPM/FileNet/lib" includes="peResources.jar"/>
+            </library>
+          </server>
+
+        filenet-jaaslogin.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!--
+            Restores the full JAAS login chain for FileNet CPE WSI authentication.
+            CaseBuilder makes server-side calls to CPE; without this the WSI client
+            cannot build a Subject containing FileNet credentials.
+          -->
+          <server>
+            <jaasLoginModule id="wsiLoginModule"
+              className="com.filenet.api.util.WSILoginModule"
+              controlFlag="REQUIRED"
+              libraryRef="FileNetCaseTeamworksLib">
+            </jaasLoginModule>
+            <jaasLoginContextEntry id="FileNetP8WSI" name="FileNetP8WSI"
+              loginModuleRef="wsiLoginModule, hashtable, userNameAndPassword, certificate, token"/>
+          </server>
+
+        cpe-auth.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!--
+            Defines FileNetAdminAlias used by CaseBuilder/CaseManager to authenticate
+            against CPE on behalf of the server (not the logged-in user).
+            CPE_USERNAME and CPE_PASSWORD Liberty variables are set in processServer_variables.xml.
+          -->
+          <server>
+            <authData id="FileNetAdminAlias" user="${CPE_USERNAME}" password="${CPE_PASSWORD}"/>
+          </server>
+
+        jvm-overrides.options: |
+          -DFileNet.WSI.AutoDetectLTPAToken=true
+          -Dcom.filenet.authentication.wsi.AutoDetectAuthToken=true
+          -Dcom.filenet.authentication.wsi.AuthTokenOrder=ltpa,oauth,oidc
+          -Dcom.filenet.authentication.token.userid=sso:ltpa
 
         ldap-registry.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
@@ -1072,12 +1186,31 @@
                     value: "2048m"
                   - name: CPE_URL
                     value: "https://cpe-svc.{{ baw_namespace }}.svc.cluster.local:9443/wsi/FNCEWS40MTOM"
+                  - name: CMIS_URL
+                    value: "https://cpe-svc.{{ baw_namespace }}.svc.cluster.local:9443/cmis/openfncmis_wlp/services"
                   - name: GRAPHQL_ENDPOINT
                     value: "https://graphql-svc.{{ baw_namespace }}.svc.cluster.local:9443/content-services-graphql/graphql"
                   - name: is_internal_baw
                     value: "true"
                   - name: CAPABILITIES
-                    value: "workflow,content-integration"
+                    value: "workflow,content-integration,case"
+                  - name: CPE_DOMAIN_NAME
+                    value: "{{ cpe_domain_name }}"
+                  - name: DOS_OBJECTSTORE_NAME
+                    value: "DOS"
+                  - name: TOS_OBJECTSTORE_NAME
+                    value: "TOS"
+                  - name: DEFAULT_TOS_OBJECTSTORE_NAME
+                    value: "TOS"
+                  - name: disableCaseEventEmitter
+                    value: "true"
+                  - name: enableContainerCHEmitter
+                    value: "false"
+                  - name: CPE_ADMIN_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: bastudio-secret
+                        key: CPE_ADMIN_PASSWORD
                   # BAW_CONTEXT_ROOT_PREFIX is read by BPMContextRootConfigService to build
                   # the endpoint URLs injected into index.jsp at login time. Without it the
                   # service returns paths without the /bas prefix (e.g. /rest/bpm/wle instead
@@ -1162,6 +1295,22 @@
                   - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/resources/security/custom-ltpa.keys
                     subPath: custom-ltpa.keys
+                  # ── CaseBuilder / FileNet config files ──────────────────────
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/oidc-rp.xml
+                    subPath: oidc-rp.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/case-libs.xml
+                    subPath: case-libs.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/filenet-jaaslogin.xml
+                    subPath: filenet-jaaslogin.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/cpe-auth.xml
+                    subPath: cpe-auth.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/jvm.options
+                    subPath: jvm-overrides.options
                   - name: tls
                     mountPath: /shared/tls/pkcs12
                   - name: startup-scripts
