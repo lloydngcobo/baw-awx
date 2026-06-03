@@ -624,39 +624,38 @@
           -Dcom.filenet.authentication.wsi.AuthTokenOrder=ltpa,oauth,oidc
           -Dcom.filenet.authentication.token.userid=sso:ltpa
 
-        ldap-registry.xml: |
+        # LDAP registry aligned to CPE/ICN (TDS type + federatedRepository = realm "LdapRegistry").
+        # Using the same type ensures LTPA tokens from BAStudio form login carry
+        # user:LdapRegistry/bawadmin, which CPE accepts for CaseBuilder WSI calls.
+        # Ref: baw-microshift-rhel/install/bas/bastudio-configmap.yaml ibm_ldap_custom_default1.xml
+        ibm_ldap_custom_default1.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
-          <!--
-            Federated LDAP registry for ISVD.
-            baseDN = ldap_user_base (ou=dev,dc=demodom,dc=nl) — NOT ldap_base_dn.
-            rdnProperty = cn — Liberty constructs bind DN as cn=<user>,ou=dev,...
-          -->
           <server>
-            <ldapRegistry id="LDAPUserRegistry"
-              realm="defaultWIMFileBasedRealm"
+            <ldapRegistry id="defaultldap1"
               host="{{ ldap_host }}"
+              baseDN="{{ ldap_base_dn }}"
               port="{{ ldap_port }}"
-              baseDN="{{ ldap_user_base }}"
+              ldapType="IBM Tivoli Directory Server"
               bindDN="{{ ldap_bind_dn }}"
-              bindPassword="${env.LDAP_BIND_PASSWORD}"
-              ldapType="Custom">
-              <ldapEntityType name="PersonAccount">
-                <rdnProperty name="cn" objectClass="inetOrgPerson"/>
-                <objectClass>inetOrgPerson</objectClass>
-              </ldapEntityType>
-              <ldapEntityType name="Group">
-                <rdnProperty name="cn" objectClass="groupOfNames"/>
-                <objectClass>groupOfNames</objectClass>
-                <memberAttribute name="member"/>
-              </ldapEntityType>
-              <userFilter
-                filter="(&amp;(uid=%v)(objectclass=inetOrgPerson))"/>
-              <groupFilter
-                filter="(&amp;(cn=%v)(objectclass=groupOfNames))"/>
-              <userIdMap filter="uid"/>
-              <groupIdMap filter="cn"/>
-              <groupMemberIdMap filter="member"/>
+              sslEnabled="false"
+              bindPassword="${env.LDAP_BIND_PASSWORD}">
+              <idsFilters
+                userFilter="(&amp;(uid=%v)(objectclass=person))"
+                groupFilter="(&amp;(cn=%v)(|(objectclass=groupofnames)(objectclass=groupofuniquenames)(objectclass=groupofurls)))"
+                userIdMap="*:uid"
+                groupIdMap="*:cn"
+                groupMemberIdMap="groupofnames:member"/>
             </ldapRegistry>
+          </server>
+
+        ibm_ldap_federated.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <federatedRepository>
+              <primaryRealm name="LdapRegistry" allowOpIfRepoDown="true">
+                <participatingBaseEntry name="{{ ldap_base_dn }}"/>
+              </primaryRealm>
+            </federatedRepository>
           </server>
 
 - name: Create BAStudio fix-java-security ConfigMap (startup hook)
@@ -1270,8 +1269,11 @@
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/transport.xml
                     subPath: transport.xml
                   - name: liberty-config
-                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ldap-registry.xml
-                    subPath: ldap-registry.xml
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ibm_ldap_custom_default1.xml
+                    subPath: ibm_ldap_custom_default1.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ibm_ldap_federated.xml
+                    subPath: ibm_ldap_federated.xml
                   - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/oidc-issuer-override.xml
                     subPath: oidc-issuer-override.xml
