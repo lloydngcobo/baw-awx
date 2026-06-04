@@ -20,6 +20,8 @@
       stringData:
         CPE_ADMIN_USER:     "{{ cpe_admin_user }}"
         CPE_ADMIN_PASSWORD: "{{ cpe_admin_password }}"
+        UMS_ADMIN_USER:     "{{ ums_admin_user }}"
+        UMS_ADMIN_PASSWORD: "{{ ums_admin_password }}"
         GCD_DB_USER:        "{{ gcd_db_user }}"
         GCD_DB_PASS:        "{{ gcd_db_pass }}"
         DOCS_DB_USER:       "{{ docs_db_user }}"
