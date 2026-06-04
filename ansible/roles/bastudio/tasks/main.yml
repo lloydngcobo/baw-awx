@@ -1645,7 +1645,7 @@
                   - name: ICN_HOSTNAME
                     value: icn-svc.{{ baw_namespace }}.svc.cluster.local
                   - name: ICN_PORT
-                    value: "443"
+                    value: "9443"
                   - name: SSL_CA_CERT_PATH
                     value: /shared/resources/cert-trusted/ca.crt
                   - name: IS_SECURE
