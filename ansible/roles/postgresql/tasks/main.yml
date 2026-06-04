@@ -1,8 +1,9 @@
 ---
 # Role: postgresql
 # Deploys PostgreSQL 16 (RHEL image) into the infra namespace.
-# Creates all BAW databases: GCD, DOCS, DOS, TOS, ICN, BAS, BAW Runtime, AAE.
-# All SQL is executed inside the pod — idempotent (skips existing databases).
+# Creates all BAW databases: GCD, DOCS, DOS, TOS, ICN, BAS, BAW Runtime, AAE, ODM.
+# All SQL is piped into the pod via kubectl exec -i — avoids shell quoting issues.
+# Grounded against install/db/create*.sql from baw-microshift-rhel reference.
 
 - name: Create PostgreSQL config Secret
   kubernetes.core.k8s:
@@ -144,193 +145,219 @@
   changed_when: false
 
 # ── Database creation (idempotent) ────────────────────────────────────────────
-# All databases use tablespace directories under /var/lib/pgsql/data/<db_name>
-# SQL is inlined so no file copy is needed.
+# SQL is piped via stdin to avoid shell escaping issues with oc exec bash -c.
+# Each task checks whether the DB already exists first (idempotent).
+# Grounded against install/db/create*.sql from baw-microshift-rhel.
 
 - name: Create GCD database
   ansible.builtin.shell: |
-    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
-      psql -U postgres -d postgres -tAc \
-        \"SELECT 1 FROM pg_database WHERE datname='{{ gcd_db_name }}'\" \
-        | grep -q 1 && echo EXISTS || (
-        mkdir -p /var/lib/pgsql/data/{{ gcd_db_name }}
-        psql -U postgres -d postgres \
-          -c \"CREATE ROLE {{ gcd_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ gcd_db_pass }}'\" \
-          -c \"CREATE TABLESPACE {{ gcd_db_name }}_tbs OWNER {{ gcd_db_user }} LOCATION '/var/lib/pgsql/data/{{ gcd_db_name }}'\" \
-          -c \"CREATE DATABASE {{ gcd_db_name }} OWNER {{ gcd_db_user }} TABLESPACE {{ gcd_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
-          -c \"GRANT ALL ON DATABASE {{ gcd_db_name }} TO {{ gcd_db_user }}\"
-        echo CREATED)"
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname='{{ gcd_db_name }}'" | grep -q 1 && echo EXISTS && exit 0
+    kubectl exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- mkdir -p /var/lib/pgsql/data/{{ gcd_db_name }}
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres <<'EOSQL'
+    CREATE ROLE {{ gcd_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ gcd_db_pass }}';
+    CREATE TABLESPACE {{ gcd_db_name }}_tbs OWNER {{ gcd_db_user }} LOCATION '/var/lib/pgsql/data/{{ gcd_db_name }}';
+    GRANT CREATE ON TABLESPACE {{ gcd_db_name }}_tbs TO {{ gcd_db_user }};
+    CREATE DATABASE {{ gcd_db_name }} OWNER {{ gcd_db_user }} TABLESPACE {{ gcd_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
+    REVOKE CONNECT ON DATABASE {{ gcd_db_name }} FROM PUBLIC;
+    GRANT ALL PRIVILEGES ON DATABASE {{ gcd_db_name }} TO {{ gcd_db_user }};
+    EOSQL
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d {{ gcd_db_name }} <<'EOSQL'
+    CREATE SCHEMA IF NOT EXISTS AUTHORIZATION {{ gcd_db_user }};
+    ALTER DATABASE {{ gcd_db_name }} SET search_path TO {{ gcd_db_user }};
+    EOSQL
+    echo CREATED
   register: _gcd
   changed_when: "'CREATED' in _gcd.stdout"
+  failed_when: _gcd.rc != 0 and 'EXISTS' not in _gcd.stdout
   no_log: true
 
 - name: Create DOCS object store database
   ansible.builtin.shell: |
-    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
-      psql -U postgres -d postgres -tAc \
-        \"SELECT 1 FROM pg_database WHERE datname='{{ docs_db_name }}'\" \
-        | grep -q 1 && echo EXISTS || (
-        mkdir -p /var/lib/pgsql/data/{{ docs_db_name }}/data
-        mkdir -p /var/lib/pgsql/data/{{ docs_db_name }}/index
-        psql -U postgres -d postgres \
-          -c \"CREATE ROLE {{ docs_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ docs_db_pass }}'\" \
-          -c \"CREATE TABLESPACE {{ docs_db_name }}_tbs OWNER {{ docs_db_user }} LOCATION '/var/lib/pgsql/data/{{ docs_db_name }}/data'\" \
-          -c \"CREATE TABLESPACE {{ docs_db_name }}indexts OWNER {{ docs_db_user }} LOCATION '/var/lib/pgsql/data/{{ docs_db_name }}/index'\" \
-          -c \"CREATE DATABASE {{ docs_db_name }} OWNER {{ docs_db_user }} TABLESPACE {{ docs_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
-          -c \"GRANT ALL ON DATABASE {{ docs_db_name }} TO {{ docs_db_user }}\"
-        echo CREATED)"
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname='{{ docs_db_name }}'" | grep -q 1 && echo EXISTS && exit 0
+    kubectl exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- mkdir -p /var/lib/pgsql/data/{{ docs_db_name }}/data /var/lib/pgsql/data/{{ docs_db_name }}/index
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres <<'EOSQL'
+    CREATE ROLE {{ docs_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ docs_db_pass }}';
+    CREATE TABLESPACE {{ docs_db_name }}_tbs OWNER {{ docs_db_user }} LOCATION '/var/lib/pgsql/data/{{ docs_db_name }}/data';
+    CREATE TABLESPACE {{ docs_db_name }}indexts OWNER {{ docs_db_user }} LOCATION '/var/lib/pgsql/data/{{ docs_db_name }}/index';
+    GRANT CREATE ON TABLESPACE {{ docs_db_name }}_tbs TO {{ docs_db_user }};
+    GRANT CREATE ON TABLESPACE {{ docs_db_name }}indexts TO {{ docs_db_user }};
+    CREATE DATABASE {{ docs_db_name }} OWNER {{ docs_db_user }} TABLESPACE {{ docs_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
+    REVOKE CONNECT ON DATABASE {{ docs_db_name }} FROM PUBLIC;
+    GRANT ALL PRIVILEGES ON DATABASE {{ docs_db_name }} TO {{ docs_db_user }};
+    EOSQL
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d {{ docs_db_name }} <<'EOSQL'
+    CREATE SCHEMA IF NOT EXISTS AUTHORIZATION {{ docs_db_user }};
+    ALTER DATABASE {{ docs_db_name }} SET search_path TO {{ docs_db_user }};
+    EOSQL
+    echo CREATED
   register: _docs
   changed_when: "'CREATED' in _docs.stdout"
+  failed_when: _docs.rc != 0 and 'EXISTS' not in _docs.stdout
   no_log: true
 
 - name: Create DOS object store database
   ansible.builtin.shell: |
-    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
-      psql -U postgres -d postgres -tAc \
-        \"SELECT 1 FROM pg_database WHERE datname='{{ dos_db_name }}'\" \
-        | grep -q 1 && echo EXISTS || (
-        mkdir -p /var/lib/pgsql/data/{{ dos_db_name }}/data
-        mkdir -p /var/lib/pgsql/data/{{ dos_db_name }}/index
-        psql -U postgres -d postgres \
-          -c \"CREATE ROLE {{ dos_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ dos_db_pass }}'\" \
-          -c \"CREATE TABLESPACE {{ dos_db_name }}_tbs OWNER {{ dos_db_user }} LOCATION '/var/lib/pgsql/data/{{ dos_db_name }}/data'\" \
-          -c \"CREATE TABLESPACE {{ dos_db_name }}indexts OWNER {{ dos_db_user }} LOCATION '/var/lib/pgsql/data/{{ dos_db_name }}/index'\" \
-          -c \"CREATE DATABASE {{ dos_db_name }} OWNER {{ dos_db_user }} TABLESPACE {{ dos_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
-          -c \"GRANT ALL ON DATABASE {{ dos_db_name }} TO {{ dos_db_user }}\"
-        echo CREATED)"
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname='{{ dos_db_name }}'" | grep -q 1 && echo EXISTS && exit 0
+    kubectl exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- mkdir -p /var/lib/pgsql/data/{{ dos_db_name }}/data /var/lib/pgsql/data/{{ dos_db_name }}/index
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres <<'EOSQL'
+    CREATE ROLE {{ dos_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ dos_db_pass }}';
+    CREATE TABLESPACE {{ dos_db_name }}_tbs OWNER {{ dos_db_user }} LOCATION '/var/lib/pgsql/data/{{ dos_db_name }}/data';
+    CREATE TABLESPACE {{ dos_db_name }}indexts OWNER {{ dos_db_user }} LOCATION '/var/lib/pgsql/data/{{ dos_db_name }}/index';
+    GRANT CREATE ON TABLESPACE {{ dos_db_name }}_tbs TO {{ dos_db_user }};
+    GRANT CREATE ON TABLESPACE {{ dos_db_name }}indexts TO {{ dos_db_user }};
+    CREATE DATABASE {{ dos_db_name }} OWNER {{ dos_db_user }} TABLESPACE {{ dos_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
+    REVOKE CONNECT ON DATABASE {{ dos_db_name }} FROM PUBLIC;
+    GRANT ALL PRIVILEGES ON DATABASE {{ dos_db_name }} TO {{ dos_db_user }};
+    EOSQL
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d {{ dos_db_name }} <<'EOSQL'
+    CREATE SCHEMA IF NOT EXISTS AUTHORIZATION {{ dos_db_user }};
+    ALTER DATABASE {{ dos_db_name }} SET search_path TO {{ dos_db_user }};
+    EOSQL
+    echo CREATED
   register: _dos
   changed_when: "'CREATED' in _dos.stdout"
+  failed_when: _dos.rc != 0 and 'EXISTS' not in _dos.stdout
   no_log: true
 
 - name: Create TOS object store database
   ansible.builtin.shell: |
-    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
-      psql -U postgres -d postgres -tAc \
-        \"SELECT 1 FROM pg_database WHERE datname='{{ tos_db_name }}'\" \
-        | grep -q 1 && echo EXISTS || (
-        mkdir -p /var/lib/pgsql/data/{{ tos_db_name }}/data
-        mkdir -p /var/lib/pgsql/data/{{ tos_db_name }}/index
-        psql -U postgres -d postgres \
-          -c \"CREATE ROLE {{ tos_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ tos_db_pass }}'\" \
-          -c \"CREATE TABLESPACE {{ tos_db_name }}_tbs OWNER {{ tos_db_user }} LOCATION '/var/lib/pgsql/data/{{ tos_db_name }}/data'\" \
-          -c \"CREATE TABLESPACE {{ tos_db_name }}indexts OWNER {{ tos_db_user }} LOCATION '/var/lib/pgsql/data/{{ tos_db_name }}/index'\" \
-          -c \"CREATE DATABASE {{ tos_db_name }} OWNER {{ tos_db_user }} TABLESPACE {{ tos_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
-          -c \"GRANT ALL ON DATABASE {{ tos_db_name }} TO {{ tos_db_user }}\"
-        echo CREATED)"
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname='{{ tos_db_name }}'" | grep -q 1 && echo EXISTS && exit 0
+    kubectl exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- mkdir -p /var/lib/pgsql/data/{{ tos_db_name }}/data /var/lib/pgsql/data/{{ tos_db_name }}/index
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres <<'EOSQL'
+    CREATE ROLE {{ tos_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ tos_db_pass }}';
+    CREATE TABLESPACE {{ tos_db_name }}_tbs OWNER {{ tos_db_user }} LOCATION '/var/lib/pgsql/data/{{ tos_db_name }}/data';
+    CREATE TABLESPACE {{ tos_db_name }}indexts OWNER {{ tos_db_user }} LOCATION '/var/lib/pgsql/data/{{ tos_db_name }}/index';
+    GRANT CREATE ON TABLESPACE {{ tos_db_name }}_tbs TO {{ tos_db_user }};
+    GRANT CREATE ON TABLESPACE {{ tos_db_name }}indexts TO {{ tos_db_user }};
+    CREATE DATABASE {{ tos_db_name }} OWNER {{ tos_db_user }} TABLESPACE {{ tos_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
+    REVOKE CONNECT ON DATABASE {{ tos_db_name }} FROM PUBLIC;
+    GRANT ALL PRIVILEGES ON DATABASE {{ tos_db_name }} TO {{ tos_db_user }};
+    EOSQL
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d {{ tos_db_name }} <<'EOSQL'
+    CREATE SCHEMA IF NOT EXISTS AUTHORIZATION {{ tos_db_user }};
+    ALTER DATABASE {{ tos_db_name }} SET search_path TO {{ tos_db_user }};
+    EOSQL
+    echo CREATED
   register: _tos
   changed_when: "'CREATED' in _tos.stdout"
+  failed_when: _tos.rc != 0 and 'EXISTS' not in _tos.stdout
   no_log: true
 
 - name: Create ICN database
   ansible.builtin.shell: |
-    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
-      psql -U postgres -d postgres -tAc \
-        \"SELECT 1 FROM pg_database WHERE datname='{{ icn_db_name }}'\" \
-        | grep -q 1 && echo EXISTS || (
-        mkdir -p /var/lib/pgsql/data/{{ icn_db_name }}
-        psql -U postgres -d postgres \
-          -c \"CREATE ROLE {{ icn_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ icn_db_pass }}'\" \
-          -c \"CREATE TABLESPACE {{ icn_db_name }}_tbs OWNER {{ icn_db_user }} LOCATION '/var/lib/pgsql/data/{{ icn_db_name }}'\" \
-          -c \"CREATE DATABASE {{ icn_db_name }} OWNER {{ icn_db_user }} TABLESPACE {{ icn_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
-          -c \"GRANT ALL ON DATABASE {{ icn_db_name }} TO {{ icn_db_user }}\"
-        psql -U postgres -d {{ icn_db_name }} \
-          -c \"CREATE SCHEMA IF NOT EXISTS icn_schema AUTHORIZATION {{ icn_db_user }}\" \
-          -c \"ALTER DATABASE {{ icn_db_name }} SET search_path TO icn_schema\"
-        echo CREATED)"
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname='{{ icn_db_name }}'" | grep -q 1 && echo EXISTS && exit 0
+    kubectl exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- mkdir -p /var/lib/pgsql/data/{{ icn_db_name }}
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres <<'EOSQL'
+    CREATE ROLE {{ icn_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ icn_db_pass }}';
+    CREATE TABLESPACE {{ icn_db_name }}_tbs OWNER {{ icn_db_user }} LOCATION '/var/lib/pgsql/data/{{ icn_db_name }}';
+    GRANT CREATE ON TABLESPACE {{ icn_db_name }}_tbs TO {{ icn_db_user }};
+    CREATE DATABASE {{ icn_db_name }} OWNER {{ icn_db_user }} TABLESPACE {{ icn_db_name }}_tbs TEMPLATE template0 ENCODING UTF8;
+    REVOKE CONNECT ON DATABASE {{ icn_db_name }} FROM PUBLIC;
+    GRANT ALL PRIVILEGES ON DATABASE {{ icn_db_name }} TO {{ icn_db_user }};
+    EOSQL
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d {{ icn_db_name }} <<'EOSQL'
+    CREATE SCHEMA IF NOT EXISTS icn_schema AUTHORIZATION {{ icn_db_user }};
+    ALTER DATABASE {{ icn_db_name }} SET search_path TO icn_schema;
+    EOSQL
+    echo CREATED
   register: _icn
   changed_when: "'CREATED' in _icn.stdout"
+  failed_when: _icn.rc != 0 and 'EXISTS' not in _icn.stdout
   no_log: true
   when: deploy_icn | default(true) | bool
 
 - name: Create BAStudio (BAS) authoring database
   ansible.builtin.shell: |
-    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
-      psql -U postgres -d postgres -tAc \
-        \"SELECT 1 FROM pg_database WHERE datname='{{ bas_db_name }}'\" \
-        | grep -q 1 && echo EXISTS || (
-        mkdir -p /var/lib/pgsql/data/{{ bas_db_name }}
-        psql -U postgres -d postgres \
-          -c \"CREATE ROLE {{ bas_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ bas_db_pass }}'\" \
-          -c \"CREATE TABLESPACE {{ bas_db_name }}_tbs OWNER {{ bas_db_user }} LOCATION '/var/lib/pgsql/data/{{ bas_db_name }}'\" \
-          -c \"CREATE DATABASE {{ bas_db_name }} OWNER {{ bas_db_user }} TABLESPACE {{ bas_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
-          -c \"GRANT ALL ON DATABASE {{ bas_db_name }} TO {{ bas_db_user }}\"
-        echo CREATED)"
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname='{{ bas_db_name }}'" | grep -q 1 && echo EXISTS && exit 0
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres <<'EOSQL'
+    CREATE ROLE {{ bas_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ bas_db_pass }}' CREATEDB CREATEROLE;
+    CREATE DATABASE {{ bas_db_name }} OWNER {{ bas_db_user }} ENCODING UTF8;
+    GRANT ALL PRIVILEGES ON DATABASE {{ bas_db_name }} TO {{ bas_db_user }};
+    EOSQL
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d {{ bas_db_name }} <<'EOSQL'
+    CREATE SCHEMA IF NOT EXISTS {{ bas_db_user }} AUTHORIZATION {{ bas_db_user }};
+    GRANT ALL ON SCHEMA {{ bas_db_user }} TO {{ bas_db_user }};
+    EOSQL
+    echo CREATED
   register: _bas
   changed_when: "'CREATED' in _bas.stdout"
+  failed_when: _bas.rc != 0 and 'EXISTS' not in _bas.stdout
   no_log: true
   when: deploy_bastudio | default(true) | bool
 
 - name: Create BAW Runtime databases
   ansible.builtin.shell: |
-    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
-      psql -U postgres -d postgres -tAc \
-        \"SELECT 1 FROM pg_database WHERE datname='{{ item.db }}'\" \
-        | grep -q 1 && echo EXISTS || (
-        mkdir -p /var/lib/pgsql/data/{{ item.db }}
-        psql -U postgres -d postgres \
-          -c \"CREATE ROLE {{ item.user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ item.pass }}'\" \
-          -c \"CREATE TABLESPACE {{ item.db }}_tbs OWNER {{ item.user }} LOCATION '/var/lib/pgsql/data/{{ item.db }}'\" \
-          -c \"CREATE DATABASE {{ item.db }} OWNER {{ item.user }} TABLESPACE {{ item.db }}_tbs TEMPLATE template0 ENCODING UTF8\" \
-          -c \"GRANT ALL ON DATABASE {{ item.db }} TO {{ item.user }}\"
-        echo CREATED)"
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname='{{ item.db }}'" | grep -q 1 && echo EXISTS && exit 0
+    kubectl exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- mkdir -p /var/lib/pgsql/data/{{ item.db }}
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres <<'EOSQL'
+    CREATE ROLE {{ item.user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ item.pass }}';
+    CREATE TABLESPACE {{ item.db }}_tbs OWNER {{ item.user }} LOCATION '/var/lib/pgsql/data/{{ item.db }}';
+    CREATE DATABASE {{ item.db }} OWNER {{ item.user }} TABLESPACE {{ item.db }}_tbs TEMPLATE template0 ENCODING UTF8;
+    GRANT ALL PRIVILEGES ON DATABASE {{ item.db }} TO {{ item.user }};
+    EOSQL
+    echo CREATED
   register: _baw_rt
   changed_when: "'CREATED' in _baw_rt.stdout"
+  failed_when: _baw_rt.rc != 0 and 'EXISTS' not in _baw_rt.stdout
   no_log: true
   loop:
     - { db: "{{ baw_rt_db_name }}",  user: "{{ baw_rt_db_user }}",  pass: "{{ baw_rt_db_pass }}" }
     - { db: "{{ baw_pdw_db_name }}", user: "{{ baw_pdw_db_user }}", pass: "{{ baw_pdw_db_pass }}" }
   when: deploy_baw_runtime | default(false) | bool
 
-# NOTE: role/tablespace/database DDL requires the postgres SUPERUSER —
-# the 'admin' role lacks CREATEROLE and superuser, so it cannot create
-# roles or tablespaces. Use -U postgres (local peer auth) for DDL.
-
-- name: Create App Engine database (postgres superuser)
+- name: Create App Engine database
   ansible.builtin.shell: |
-    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
-      psql -U postgres -d postgres -tAc \
-        \"SELECT 1 FROM pg_database WHERE datname='{{ aae_db_name }}'\" \
-        | grep -q 1 && echo EXISTS || (
-        mkdir -p /var/lib/pgsql/data/{{ aae_db_name }}
-        psql -U postgres -d postgres \
-          -c \"CREATE ROLE {{ aae_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ aae_db_pass }}'\" \
-          -c \"CREATE TABLESPACE {{ aae_db_name }}_tbs OWNER {{ aae_db_user }} LOCATION '/var/lib/pgsql/data/{{ aae_db_name }}'\" \
-          -c \"CREATE DATABASE {{ aae_db_name }} OWNER {{ aae_db_user }} TABLESPACE {{ aae_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
-          -c \"GRANT ALL ON DATABASE {{ aae_db_name }} TO {{ aae_db_user }}\"
-        psql -U postgres -d {{ aae_db_name }} \
-          -c \"CREATE SCHEMA IF NOT EXISTS {{ aae_db_user }} AUTHORIZATION {{ aae_db_user }}\" \
-          -c \"GRANT ALL ON SCHEMA {{ aae_db_user }} TO {{ aae_db_user }}\" \
-          -c \"ALTER DEFAULT PRIVILEGES IN SCHEMA {{ aae_db_user }} GRANT ALL ON TABLES TO {{ aae_db_user }}\" \
-          -c \"ALTER DEFAULT PRIVILEGES IN SCHEMA {{ aae_db_user }} GRANT ALL ON SEQUENCES TO {{ aae_db_user }}\" \
-          -c \"ALTER DATABASE {{ aae_db_name }} SET search_path TO {{ aae_db_user }}\"
-        echo CREATED)"
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname='{{ aae_db_name }}'" | grep -q 1 && echo EXISTS && exit 0
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres <<'EOSQL'
+    CREATE ROLE {{ aae_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ aae_db_pass }}';
+    CREATE DATABASE {{ aae_db_name }} OWNER {{ aae_db_user }} ENCODING UTF8;
+    GRANT ALL PRIVILEGES ON DATABASE {{ aae_db_name }} TO {{ aae_db_user }};
+    EOSQL
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d {{ aae_db_name }} <<'EOSQL'
+    CREATE SCHEMA IF NOT EXISTS {{ aae_db_user }} AUTHORIZATION {{ aae_db_user }};
+    GRANT ALL ON SCHEMA {{ aae_db_user }} TO {{ aae_db_user }};
+    ALTER DEFAULT PRIVILEGES IN SCHEMA {{ aae_db_user }} GRANT ALL ON TABLES TO {{ aae_db_user }};
+    ALTER DEFAULT PRIVILEGES IN SCHEMA {{ aae_db_user }} GRANT ALL ON SEQUENCES TO {{ aae_db_user }};
+    ALTER DATABASE {{ aae_db_name }} SET search_path TO {{ aae_db_user }};
+    EOSQL
+    echo CREATED
   register: _aae
   changed_when: "'CREATED' in _aae.stdout"
+  failed_when: _aae.rc != 0 and 'EXISTS' not in _aae.stdout
   no_log: true
   when: deploy_app_engine | default(false) | bool
 
-- name: Create ODM database (postgres superuser)
+- name: Create ODM database
   ansible.builtin.shell: |
-    oc exec -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- bash -c "
-      psql -U postgres -d postgres -tAc \
-        \"SELECT 1 FROM pg_database WHERE datname='{{ odm_db_name }}'\" \
-        | grep -q 1 && echo EXISTS || (
-        mkdir -p /var/lib/pgsql/data/{{ odm_db_name }}
-        psql -U postgres -d postgres \
-          -c \"CREATE ROLE {{ odm_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ odm_db_pass }}'\" \
-          -c \"CREATE TABLESPACE {{ odm_db_name }}_tbs OWNER {{ odm_db_user }} LOCATION '/var/lib/pgsql/data/{{ odm_db_name }}'\" \
-          -c \"CREATE DATABASE {{ odm_db_name }} OWNER {{ odm_db_user }} TABLESPACE {{ odm_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
-          -c \"GRANT ALL ON DATABASE {{ odm_db_name }} TO {{ odm_db_user }}\"
-        psql -U postgres -d {{ odm_db_name }} \
-          -c \"CREATE SCHEMA IF NOT EXISTS {{ odm_db_user }} AUTHORIZATION {{ odm_db_user }}\" \
-          -c \"GRANT ALL ON SCHEMA {{ odm_db_user }} TO {{ odm_db_user }}\" \
-          -c \"ALTER DEFAULT PRIVILEGES IN SCHEMA {{ odm_db_user }} GRANT ALL ON TABLES TO {{ odm_db_user }}\" \
-          -c \"ALTER DEFAULT PRIVILEGES IN SCHEMA {{ odm_db_user }} GRANT ALL ON SEQUENCES TO {{ odm_db_user }}\" \
-          -c \"ALTER DEFAULT PRIVILEGES IN SCHEMA {{ odm_db_user }} GRANT ALL ON FUNCTIONS TO {{ odm_db_user }}\" \
-          -c \"ALTER DATABASE {{ odm_db_name }} SET search_path TO {{ odm_db_user }}\"
-        echo CREATED)"
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname='{{ odm_db_name }}'" | grep -q 1 && echo EXISTS && exit 0
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d postgres <<'EOSQL'
+    CREATE USER {{ odm_db_user }} WITH PASSWORD '{{ odm_db_pass }}';
+    CREATE DATABASE {{ odm_db_name }} WITH OWNER = {{ odm_db_user }} ENCODING = 'UTF8' TABLESPACE = pg_default TEMPLATE = template0;
+    REVOKE CONNECT ON DATABASE {{ odm_db_name }} FROM PUBLIC;
+    GRANT ALL PRIVILEGES ON DATABASE {{ odm_db_name }} TO {{ odm_db_user }};
+    GRANT CONNECT, TEMP, CREATE ON DATABASE {{ odm_db_name }} TO {{ odm_db_user }};
+    EOSQL
+    kubectl exec -i -n {{ infra_namespace }} {{ _pg_pod.stdout }} -- psql -U postgres -d {{ odm_db_name }} <<'EOSQL'
+    CREATE SCHEMA IF NOT EXISTS {{ odm_db_user }} AUTHORIZATION {{ odm_db_user }};
+    GRANT ALL ON SCHEMA {{ odm_db_user }} TO {{ odm_db_user }};
+    ALTER DEFAULT PRIVILEGES IN SCHEMA {{ odm_db_user }} GRANT ALL ON TABLES TO {{ odm_db_user }};
+    ALTER DEFAULT PRIVILEGES IN SCHEMA {{ odm_db_user }} GRANT ALL ON SEQUENCES TO {{ odm_db_user }};
+    ALTER DEFAULT PRIVILEGES IN SCHEMA {{ odm_db_user }} GRANT ALL ON FUNCTIONS TO {{ odm_db_user }};
+    ALTER DATABASE {{ odm_db_name }} SET search_path TO {{ odm_db_user }};
+    EOSQL
+    echo CREATED
   register: _odm_db
   changed_when: "'CREATED' in _odm_db.stdout"
+  failed_when: _odm_db.rc != 0 and 'EXISTS' not in _odm_db.stdout
   when: deploy_odm | default(false) | bool
 
 - name: PostgreSQL summary
