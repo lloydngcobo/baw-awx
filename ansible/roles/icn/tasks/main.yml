@@ -74,7 +74,7 @@
               bindPassword="${env.LDAP_BIND_PASSWORD}"
               ldapType="Custom">
               <ldapEntityType name="PersonAccount">
-                <rdnProperty name="cn"/>
+                <rdnProperty name="uid"/>
                 <objectClass>inetOrgPerson</objectClass>
               </ldapEntityType>
               <ldapEntityType name="Group">

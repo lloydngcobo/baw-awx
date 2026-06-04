@@ -1719,9 +1719,9 @@
                       path: CPE_USERNAME
                     - key: CPE_ADMIN_PASSWORD
                       path: CPE_PASSWORD
-                    - key: UMS_ADMIN_USER
+                    - key: CPE_ADMIN_USER
                       path: NAVIGATOR_USERNAME
-                    - key: UMS_ADMIN_PASSWORD
+                    - key: CPE_ADMIN_PASSWORD
                       path: NAVIGATOR_PASSWORD
               - name: ca-tls-volume
                 configMap:
@@ -1755,8 +1755,8 @@
         umsAdminPassword: "{{ ums_admin_password }}"
         oidcClientId: bastudio
         oidcClientSecret: "{{ ums_admin_password }}"
-        navigatorUsername: "{{ ums_admin_user }}"
-        navigatorPassword: "{{ ums_admin_password }}"
+        navigatorUsername: "{{ cpe_admin_user }}"
+        navigatorPassword: "{{ cpe_admin_password }}"
 
 - name: Check if workplace-init Job already completed
   ansible.builtin.shell: >
