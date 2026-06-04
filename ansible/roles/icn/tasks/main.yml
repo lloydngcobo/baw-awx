@@ -435,7 +435,6 @@
                   capabilities:
                     drop: ["ALL"]
                   privileged: false
-                  runAsNonRoot: true
                   allowPrivilegeEscalation: false
                 env:
                   - name: CURL_CA_BUNDLE
