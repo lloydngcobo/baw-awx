@@ -151,6 +151,27 @@ cpe_admin_user: "p8admin"
 cpe_admin_password: "Password1"   # REQUIRED
 cpe_domain_name: "P8Domain"
 
+# Object stores created via the CPE container-native init API (config-*.sh equivalents).
+# index = the index tablespace created by the postgresql role ({{ db }}indexts).
+cpe_object_stores:
+  - { sym: "DOCS", display: "Document Objectstore", dbc: "DOCSDB", ds: "FNDOCSDS", dsxa: "FNDOCSDSXA", index: "{{ docs_db_name }}indexts" }
+  - { sym: "DOS",  display: "Design Objectstore",   dbc: "DOSDB",  ds: "FNDOSDS",  dsxa: "FNDOSDSXA",  index: "{{ dos_db_name }}indexts" }
+  - { sym: "TOS",  display: "Target Objectstore",   dbc: "TOSDB",  ds: "FNTOSDS",  dsxa: "FNTOSDSXA",  index: "{{ tos_db_name }}indexts" }
+
+# CE addon GUIDs installed on each object store (from reference config-dos.sh)
+cpe_ce_addons:
+  - "{CE460ADD-0000-0000-0000-000000000004}"
+  - "{CE460ADD-0000-0000-0000-000000000001}"
+  - "{CE460ADD-0000-0000-0000-000000000003}"
+  - "{CE511ADD-0000-0000-0000-000000000006}"
+  - "{CE460ADD-0000-0000-0000-000000000008}"
+  - "{CE460ADD-0000-0000-0000-000000000007}"
+  - "{CE460ADD-0000-0000-0000-000000000009}"
+  - "{CE460ADD-0000-0000-0000-00000000000A}"
+  - "{CE460ADD-0000-0000-0000-00000000000B}"
+  - "{CE460ADD-0000-0000-0000-00000000000D}"
+  - "{CE511ADD-0000-0000-0000-00000000000F}"
+
 # =============================================================================
 # UMS (User Management Service)
 # =============================================================================

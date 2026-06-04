@@ -540,10 +540,17 @@
   register: _cpe_pod
   changed_when: false
 
-# ── GCD initialization (idempotent) ──────────────────────────────────────────
-# Uses the container-native REST API (CONTAINERTYPE=1) to create the FileNet
-# P8 domain. Returns 409 if domain already exists — both 200 and 409 are success.
-# Object stores (DOCS/DOS/TOS) are created by the BAStudio content-init Job (step 10).
+# ── GCD + directory + object store initialization (idempotent) ───────────────
+# Uses the container-native REST API (CONTAINERTYPE=1). Mirrors the reference
+# config-gcd.sh / config-dos.sh / config-tos.sh / config-docs.sh scripts:
+#   1. POST /domain                       — create the P8 domain
+#   2. POST /domain/directoryConfigs      — register LDAP security provider
+#   3. per object store (DOCS/DOS/TOS):
+#        POST /databaseconnections        — register the JNDI datasource pair
+#        POST /objectstores               — create the object store
+#        PUT  /objectstores/<sym>/addons/ — install CE addons
+# Without step 2 the domain has "No Security Providers" (FNRCS0004E) and CPE
+# never finishes loading the domain (liveness fails, /P8CE/Health 500).
 
 - name: Initialize FileNet GCD domain via container-native API
   ansible.builtin.shell: >
@@ -556,7 +563,97 @@
     -d '{"serviceUser":"{{ cpe_admin_user }}","serviceUserPassword":"{{ cpe_admin_password }}","encryptionKeyLength":128,"domainName":"{{ cpe_domain_name }}"}'
   register: _gcd_init
   changed_when: _gcd_init.stdout | trim == "200"
-  ignore_errors: true
+  failed_when: _gcd_init.stdout | trim not in ['200', '409']
+  no_log: true
+
+- name: Register LDAP directory configuration on the domain
+  ansible.builtin.shell: >
+    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} --
+    curl -sk -o /dev/null -w "%{http_code}"
+    -X POST
+    -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
+    -H "Content-Type: application/json"
+    "http://localhost:9080/cpe/init/v1/domain/directoryConfigs"
+    -d @-
+  args:
+    stdin: |
+      {
+        "adminUserNames": ["{{ cpe_admin_user }}"],
+        "groupMembershipSearchFilter": "(|(&(objectclass=groupofnames)(member={0}))(&(objectclass=groupofuniquenames)(uniquemember={0})))",
+        "groupSearchFilter": "(&(cn={0})(|(objectclass=groupofnames)(objectclass=groupofuniquenames)(objectclass=groupofurls)))",
+        "dirSvcUser": "{{ ldap_bind_dn }}",
+        "userBaseDN": "{{ ldap_base_dn }}",
+        "sslEnabled": "false",
+        "groupDisplayNameAttr": "cn",
+        "adminsGroupNames": ["p8admins"],
+        "dirSvcHostname": "{{ ldap_host }}",
+        "dcType": "Tivoli",
+        "directoryProviderName": "ldap",
+        "userSearchFilter": "(&(uid={0})(objectclass=person))",
+        "groupNameAttribute": "cn",
+        "userNameAttribute": "uid",
+        "dirSvcPort": "{{ ldap_port }}",
+        "groupBaseDN": "{{ ldap_base_dn }}",
+        "userDisplayNameAttr": "uid",
+        "allowEmailOrUPNShortNames": "false",
+        "dirSvcPasswd": "{{ ldap_bind_password }}",
+        "userUniqueIDAttribute": "ibm-entryUuid",
+        "groupUniqueIDAttribute": "ibm-entryUuid"
+      }
+  register: _dir_cfg
+  changed_when: _dir_cfg.stdout | trim == "200"
+  failed_when: _dir_cfg.stdout | trim not in ['200', '409']
+  no_log: true
+
+- name: Create object store database connection
+  ansible.builtin.shell: >
+    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} --
+    curl -sk -o /dev/null -w "%{http_code}"
+    -X POST
+    -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
+    -H "Content-Type: application/json"
+    "http://localhost:9080/cpe/init/v1/databaseconnections"
+    -d '{"jndiDataSource":"{{ item.ds }}","jndiXaDataSource":"{{ item.dsxa }}","siteName":"InitialSite","databaseConnectionName":"{{ item.dbc }}"}'
+  loop: "{{ cpe_object_stores }}"
+  loop_control:
+    label: "{{ item.sym }}"
+  register: _os_dbc
+  changed_when: _os_dbc.stdout | trim == "200"
+  failed_when: _os_dbc.stdout | trim not in ['200', '409']
+  no_log: true
+
+- name: Create object stores
+  ansible.builtin.shell: >
+    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} --
+    curl -sk -o /dev/null -w "%{http_code}"
+    -X POST
+    -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
+    -H "Content-Type: application/json"
+    "http://localhost:9080/cpe/init/v1/objectstores"
+    -d '{"databaseConnectionName":"{{ item.dbc }}","objectStoreDisplayName":"{{ item.display }}","objectStoreSymbolicName":"{{ item.sym }}","databaseIndexStorageLocation":"{{ item.index }}","adminUserGroups":["p8admins","{{ cpe_admin_user }}","bawadmins","{{ ums_admin_user }}"],"basicUserGroups":["p8users","bawusers"]}'
+  loop: "{{ cpe_object_stores }}"
+  loop_control:
+    label: "{{ item.sym }}"
+  register: _os_create
+  changed_when: _os_create.stdout | trim == "200"
+  failed_when: _os_create.stdout | trim not in ['200', '409']
+  no_log: true
+
+- name: Install CE addons on object stores
+  ansible.builtin.shell: >
+    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} --
+    curl -sk -o /dev/null -w "%{http_code}"
+    -X PUT
+    -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
+    -H "Content-Type: application/json"
+    "http://localhost:9080/cpe/init/v1/objectstores/{{ item.0.sym }}/addons/"
+    -d '{"addonId":"{{ item.1 }}"}'
+  loop: "{{ cpe_object_stores | product(cpe_ce_addons) | list }}"
+  loop_control:
+    label: "{{ item.0.sym }} {{ item.1 }}"
+  register: _os_addons
+  changed_when: _os_addons.stdout | trim == "200"
+  failed_when: false
   no_log: true
 
 - name: CPE summary
@@ -565,4 +662,4 @@
       - "CPE ready at https://{{ cpe_host }}:{{ cpe_port }}"
       - "Admin console : https://{{ baw_hostname }}/acce/"
       - "WSI endpoint  : https://{{ cpe_host }}:{{ cpe_port }}/wsi/FNCEWS40MTOM/"
-      - "Object stores (DOCS/DOS/TOS) are created by BAStudio content-init Job (step 10)"
+      - "Domain : {{ cpe_domain_name }} with LDAP directory + object stores DOCS/DOS/TOS"

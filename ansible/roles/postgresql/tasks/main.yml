@@ -175,6 +175,7 @@
         psql -U {{ postgres_admin_user }} -d {{ postgres_db }} \
           -c \"CREATE ROLE {{ docs_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ docs_db_pass }}'\" \
           -c \"CREATE TABLESPACE {{ docs_db_name }}_tbs OWNER {{ docs_db_user }} LOCATION '/var/lib/pgsql/data/{{ docs_db_name }}/data'\" \
+          -c \"CREATE TABLESPACE {{ docs_db_name }}indexts OWNER {{ docs_db_user }} LOCATION '/var/lib/pgsql/data/{{ docs_db_name }}/index'\" \
           -c \"CREATE DATABASE {{ docs_db_name }} OWNER {{ docs_db_user }} TABLESPACE {{ docs_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
           -c \"GRANT ALL ON DATABASE {{ docs_db_name }} TO {{ docs_db_user }}\"
         echo CREATED)"
@@ -193,6 +194,7 @@
         psql -U {{ postgres_admin_user }} -d {{ postgres_db }} \
           -c \"CREATE ROLE {{ dos_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ dos_db_pass }}'\" \
           -c \"CREATE TABLESPACE {{ dos_db_name }}_tbs OWNER {{ dos_db_user }} LOCATION '/var/lib/pgsql/data/{{ dos_db_name }}/data'\" \
+          -c \"CREATE TABLESPACE {{ dos_db_name }}indexts OWNER {{ dos_db_user }} LOCATION '/var/lib/pgsql/data/{{ dos_db_name }}/index'\" \
           -c \"CREATE DATABASE {{ dos_db_name }} OWNER {{ dos_db_user }} TABLESPACE {{ dos_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
           -c \"GRANT ALL ON DATABASE {{ dos_db_name }} TO {{ dos_db_user }}\"
         echo CREATED)"
@@ -211,6 +213,7 @@
         psql -U {{ postgres_admin_user }} -d {{ postgres_db }} \
           -c \"CREATE ROLE {{ tos_db_user }} WITH INHERIT LOGIN ENCRYPTED PASSWORD '{{ tos_db_pass }}'\" \
           -c \"CREATE TABLESPACE {{ tos_db_name }}_tbs OWNER {{ tos_db_user }} LOCATION '/var/lib/pgsql/data/{{ tos_db_name }}/data'\" \
+          -c \"CREATE TABLESPACE {{ tos_db_name }}indexts OWNER {{ tos_db_user }} LOCATION '/var/lib/pgsql/data/{{ tos_db_name }}/index'\" \
           -c \"CREATE DATABASE {{ tos_db_name }} OWNER {{ tos_db_user }} TABLESPACE {{ tos_db_name }}_tbs TEMPLATE template0 ENCODING UTF8\" \
           -c \"GRANT ALL ON DATABASE {{ tos_db_name }} TO {{ tos_db_user }}\"
         echo CREATED)"
