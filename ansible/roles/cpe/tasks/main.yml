@@ -564,6 +564,9 @@
     "http://localhost:9080/cpe/init/v1/domain"
     -d '{"serviceUser":"{{ cpe_admin_user }}","serviceUserPassword":"{{ cpe_admin_password }}","encryptionKeyLength":128,"domainName":"{{ cpe_domain_name }}"}'
   register: _gcd_init
+  until: _gcd_init.stdout | trim in ['200', '409']
+  retries: 20
+  delay: 15
   changed_when: _gcd_init.stdout | trim == "200"
   failed_when: _gcd_init.stdout | trim not in ['200', '409']
   no_log: true
