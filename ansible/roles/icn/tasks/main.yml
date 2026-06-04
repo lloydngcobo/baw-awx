@@ -485,9 +485,16 @@
                     fi
                     echo "Got security token."
 
+                    # Helper: refresh TOKEN from any ICN response that contains security_token
+                    refresh_token() {
+                      local NEW_TOK
+                      NEW_TOK=$(echo "$1" | sed -n 's/.*"security_token":"\([^"]*\)".*/\1/p')
+                      if [ -n "${NEW_TOK}" ]; then TOKEN="${NEW_TOK}"; fi
+                    }
+
                     echo "Step 1-1: Updating ICN admin settings (adminUsers)..."
                     JSON_ADMIN_CFG='{"settingsConfig":{"editServiceCustomURLEnabled":false,"editServiceDownloadLinkEnabled":true,"adminUsers":"{{ cpe_admin_user }},{{ ums_admin_user }},admin,odmadmin","absoluteSessionTimeoutDuration":120,"absoluteSessionTimeoutEnabled":false,"id":"default","globalId":"settings.navigator.default","fileTypes":["boxnote","excel","outlook","pdf","powerpoint","word"],"navigatorMode":0,"tempfileCleanupInterval":6,"tempfileExpirationInterval":24,"pluginInitAttempts":3,"taskManagerServiceEnabled":"false","taskManagerHeartBeatMonitor":false,"editFilesCleanupInterval":20,"mobileAccess":"true","disableAutocomplete":"true","helpUrl":"https://www.ibm.com/docs","logging.level":"2","encryptLinks":false,"customSettings":"{}","umsUrl":"","ssoLogOutURL":"","ssoLogOutMethodRedirect":false,"culturalCollation":"false","officeOnlineEnabled":false,"asperaEnabled":false,"userActionMacros":["added.p8","modified.p8","checkedOut.p8","added.cm","modified.cm","checkedOut.cm"],"iconStatus":["docHold","docNotes","docMinorVersions","docDeclaredRecord","docBookmarks","docCheckedOut","workItemSuspended","workItemDeadlineImportance","workItemDeadlineReminderSent","workItemLocked","workItemCheckedOut"]},"objectExpiration":10,"fileTypesMappingData":[{"id":"pdf","_attributes":{"name":"PDF","description":"Adobe Portable Document Format(PDF)","contentTypes":"application/pdf","onlyUseInETAssociations":false}},{"id":"word","_attributes":{"name":"Word","description":"Microsoft Office Word","contentTypes":"application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.wordprocessingml.template","onlyUseInETAssociations":false}},{"id":"excel","_attributes":{"name":"Excel","description":"Microsoft Office Excel","contentTypes":"application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.spreadsheetml.template","onlyUseInETAssociations":false}},{"id":"powerpoint","_attributes":{"name":"PowerPoint","description":"Microsoft Office PowerPoint","contentTypes":"application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.presentationml.slideshow,application/vnd.openxmlformats-officedocument.presentationml.template","onlyUseInETAssociations":false}},{"id":"outlook","_attributes":{"name":"Outlook","description":"Microsoft Office Outlook","contentTypes":"application/x-filenet-filetype-msg,application/x-filenet-fileext-msg,application/vnd.ms-outlook","onlyUseInETAssociations":false}},{"id":"boxnote","_attributes":{"name":"Box Note","description":"Box Note","contentTypes":"application/x-box-note","onlyUseInETAssociations":false}}],"interfaceTextArray":[]}'
-                    curl -sk -b "${COOKIES}" -c "${COOKIES}" \
+                    ADMIN_RESP=$(curl -sk -b "${COOKIES}" -c "${COOKIES}" \
                       -H "security_token: ${TOKEN}" \
                       -X POST "https://${ICN_HOST}/navigator/jaxrs/admin/updateAdminSettingsData" \
                       --data-urlencode "action=update" \
@@ -495,8 +502,9 @@
                       --data-urlencode "login_desktop=admin" \
                       --data-urlencode "securityTopic=settings.settings" \
                       --data-urlencode "userid=${ICN_USER}" \
-                      --data-urlencode "json_post=${JSON_ADMIN_CFG}" | cut -c1-120
-                    echo "  Admin settings done."
+                      --data-urlencode "json_post=${JSON_ADMIN_CFG}")
+                    refresh_token "${ADMIN_RESP}"
+                    echo "  Admin settings done (token refreshed)."
 
                     for ENTRY in "DOCS:Docs Objectstore" "DOS:ICMDesign Objectstore" "TOS:ICMTarget Objectstore"; do
                       OS="${ENTRY%%:*}"
@@ -522,6 +530,7 @@
                         --data-urlencode "objectStore=${OS}" \
                         --data-urlencode "objectStoreDisplayName=${REPO_NAME}" \
                         --data-urlencode "protocol=FileNetP8WSI")
+                      refresh_token "${P8_RESP}"
                       echo "  P8 logon: ${P8_RESP:0:200}"
 
                       JSON_POST=$(printf '{"repositoryConfig":{"type":"p8","id":"%s","version":"2.0","serverName":"%s","objectStore":"%s","name":"%s","objectStoreName":"%s","protocol":"FileNetP8WSI","useSSO":false,"enableWSI":true,"maxHits":1000,"timeoutInSeconds":"60","simpleSearchMaxResults":"5000","searchMaxResults":"0","maxDownloadSize":0,"maxInMemoryRetrieveSize":0,"traceLevel":0,"portNumber":"0","docNameProp":"DocumentTitle","folderNameProp":"FolderName","cmisRepositoryID":"*","cmisBindingType":"AtomPub","checkinAsMajorVersion":true,"addAsMajorVersion":true,"globalId":"repository.navigator.p8defaultsettings","defaultSearchType":"document","defaultSearchVersion":"releasedversion","allClassesSearch":"documentsIncludesNonFolders","teamspaceTemplatePermissions":"[]","teamspacePermissions":"[]","redactionPermissions":"[]","redactionPolicyPermissions":"[]","entryTemplatePermissions":"[]","searchPermissions":"[]","searchDefCols":["{NAME}","ContentSize","LastModifier","DateLastModified","MajorVersionNumber"],"folderDefCols":["{NAME}","ContentSize","LastModifier","DateLastModified","MajorVersionNumber"],"documentSystemProperties":["Creator","DateCreated","LastModifier","DateLastModified","Id","IsReserved","IsCurrentVersion","MajorVersionNumber","MinorVersionNumber","ContentSize","MimeType"],"folderSystemProperties":["Creator","DateCreated","Id","PathName"],"searchShowHiddenProperties":true,"restrictedSearchDocumentsType":true,"restrictedSearchFoldersType":true,"includeMIMETypesInSearchResults":true,"matchAll":true,"usePartFileName":true,"includeAttrGroupInAttrDisplayName":true,"keepInAutoFolder":true,"burnPDFToPDF":"true","approvalWorkflowEnabled":"true","annotationSecurity":"inherit","statusDocCheckedOut":"true","statusDocHold":true,"statusDocNotes":true,"statusDocFavorite":"true","statusOffline":"true","statusWorkItemDeadline":"true","statusWorkItemLocked":"true","isValid":true,"isWarn":"false"}}' \
@@ -538,6 +547,7 @@
                         --data-urlencode "action=add" \
                         --data-urlencode "json_post=${JSON_POST}" \
                         --data-urlencode "desktop=admin")
+                      refresh_token "${SAVE_RESP}"
                       echo "  Save: ${SAVE_RESP:0:200}"
                       if echo "${SAVE_RESP}" | grep -q '"error"\|"errors"'; then
                         if echo "${SAVE_RESP}" | grep -qi 'already exist\|duplicate\|exists'; then
@@ -557,7 +567,8 @@
                         --data-urlencode "login_desktop=admin" \
                         --data-urlencode "configuration=RepositoryConfig" \
                         --data-urlencode 'json_post={"propertiesMappingData":[]}' \
-                        --data-urlencode "desktop=admin" | cut -c1-120
+                        --data-urlencode "desktop=admin")
+                      refresh_token "${MAP_RESP}"
                       echo "  ${REPO_ID} done."
                     done
 
