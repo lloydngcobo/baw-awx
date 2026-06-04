@@ -92,6 +92,12 @@
             </ldapRegistry>
           </server>
 
+        session-config.xml: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <server>
+            <httpSession invalidateOnUnauthorizedSessionRequestException="false"/>
+          </server>
+
         ssl-config.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
           <server>
@@ -310,6 +316,9 @@
                   - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/ssl-config.xml
                     subPath: ssl-config.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/session-config.xml
+                    subPath: session-config.xml
                   - name: tls
                     mountPath: /shared/tls/pkcs12
                   # ICMAPIPlugin JARs written here by case-init job (via bastudio-case-init PVC)
