@@ -580,6 +580,7 @@
   register: _dir_cfg
   changed_when: _dir_cfg.stdout | trim == "200"
   failed_when: _dir_cfg.stdout | trim not in ['200', '409']
+  no_log: true
 
 - name: Create object store database connection
   ansible.builtin.shell: >
@@ -630,6 +631,31 @@
   register: _os_addons
   changed_when: _os_addons.stdout | trim == "200"
   failed_when: false
+  no_log: true
+
+# ── Workflow connection points (required by case-init) ────────────────────────
+# Creates WorkPlace XT connection points for DOS and TOS object stores.
+# Modelled on install/fn/config-dos.sh and config-tos.sh from baw-microshift-rhel.
+# case-init references tos-cp (CONN_POINT_NAME) — if it doesn't exist in CPE
+# the "Non-repository object tos-cp not found" error kills case-init.
+
+- name: Configure workflow connection point for object stores
+  ansible.builtin.shell: >
+    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} -c cpe --
+    curl -sk -o /dev/null -w "%{http_code}"
+    -X POST
+    -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
+    -H "Content-Type: application/json"
+    "http://localhost:9080/cpe/init/v1/objectstores/{{ item.sym }}/workflow/"
+    -d '{"adminGroup":"p8admins","configGroup":"p8admins","indexTableSpace":"{{ item.index }}","dataTableSpace":"{{ item.sym | lower }}_db_tbs","connectionPointName":"{{ item.sym | lower }}-cp","regionName":"{{ item.sym | lower }}-region","regionNumber":"1","dateTimeMask":"mm/dd/yy hh:tt am","locale":"en"}'
+  loop:
+    - { sym: "DOS", index: "{{ dos_db_name }}indexts" }
+    - { sym: "TOS", index: "{{ tos_db_name }}indexts" }
+  loop_control:
+    label: "{{ item.sym }}"
+  register: _workflow_cp
+  changed_when: _workflow_cp.stdout | trim == "200"
+  failed_when: _workflow_cp.stdout | trim not in ['200', '409']
   no_log: true
 
 - name: CPE summary
