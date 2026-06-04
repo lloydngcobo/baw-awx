@@ -558,7 +558,7 @@
                         fi
                       fi
 
-                      curl -sk -b "${COOKIES}" -c "${COOKIES}" \
+                      MAP_RESP=$(curl -sk -b "${COOKIES}" -c "${COOKIES}" \
                         -X POST "https://${ICN_HOST}/navigator/jaxrs/admin/configuration" \
                         -H "security_token: ${TOKEN}" \
                         --data-urlencode "action=updatePropertiesMapping" \
