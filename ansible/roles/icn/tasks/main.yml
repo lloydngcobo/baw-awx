@@ -65,38 +65,39 @@
         ldap-registry.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
           <server>
-            <ldapRegistry id="LDAPUserRegistry"
-              realm="defaultWIMFileBasedRealm"
+            <ldapRegistry id="defaultldap1"
               host="{{ ldap_host }}"
+              baseDN="{{ ldap_base_dn }}"
               port="{{ ldap_port }}"
-              baseDN="{{ ldap_user_base }}"
+              ldapType="IBM Tivoli Directory Server"
               bindDN="{{ ldap_bind_dn }}"
-              bindPassword="${env.LDAP_BIND_PASSWORD}"
-              ldapType="Custom">
-              <ldapEntityType name="PersonAccount">
-                <rdnProperty name="uid"/>
-                <objectClass>inetOrgPerson</objectClass>
-              </ldapEntityType>
-              <ldapEntityType name="Group">
-                <rdnProperty name="cn"/>
-                <objectClass>groupOfNames</objectClass>
-                <memberAttribute name="member"/>
-              </ldapEntityType>
-              <userFilter
-                filter="(&amp;(uid=%v)(objectclass=inetOrgPerson))"/>
-              <groupFilter
-                filter="(&amp;(cn=%v)(objectclass=groupOfNames))"/>
-              <userIdMap filter="uid"/>
-              <groupIdMap filter="cn"/>
-              <groupMemberIdMap filter="member"/>
+              sslEnabled="false"
+              bindPassword="${env.LDAP_BIND_PASSWORD}">
+              <idsFilters
+                userFilter="(&amp;(uid=%v)(objectclass=person))"
+                groupFilter="(&amp;(cn=%v)(|(objectclass=groupofnames)(objectclass=groupofuniquenames)(objectclass=groupofurls)))"
+                userIdMap="*:uid"
+                groupIdMap="*:cn"
+                groupMemberIdMap="groupofnames:member"/>
             </ldapRegistry>
+            <federatedRepository>
+              <primaryRealm name="LdapRegistry" allowOpIfRepoDown="true">
+                <participatingBaseEntry name="{{ ldap_base_dn }}"/>
+              </primaryRealm>
+            </federatedRepository>
           </server>
 
         session-config.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
           <server>
-            <httpSession invalidateOnUnauthorizedSessionRequestException="false"/>
+            <httpSession
+              invalidationTimeout="120m"
+              idReuse="true"
+              invalidateOnUnauthorizedSessionRequestException="false"/>
           </server>
+
+        environment.properties: |
+          ICNADMIN={{ cpe_admin_user }}
 
         ssl-config.xml: |
           <?xml version="1.0" encoding="UTF-8"?>
@@ -260,6 +261,8 @@
                     value: "true"
                   - name: TZ
                     value: "{{ timezone }}"
+                  - name: ENV_PROP_FILE
+                    value: /opt/ibm/wlp/usr/servers/defaultServer/resources/security/environment.properties
                   - name: JVM_HEAP_XMS
                     value: "512m"
                   - name: JVM_HEAP_XMX
@@ -319,6 +322,9 @@
                   - name: liberty-config
                     mountPath: /opt/ibm/wlp/usr/servers/defaultServer/configDropins/overrides/session-config.xml
                     subPath: session-config.xml
+                  - name: liberty-config
+                    mountPath: /opt/ibm/wlp/usr/servers/defaultServer/resources/security/environment.properties
+                    subPath: environment.properties
                   - name: tls
                     mountPath: /shared/tls/pkcs12
                   # ICMAPIPlugin JARs written here by case-init job (via bastudio-case-init PVC)
