@@ -15,6 +15,11 @@
 #   - baw-ssl-certs from openshift-config
 #   - proxy/cluster trustedCA patch (optional, --tags cleanup_trust)
 #
+# NFS wipe (default ON):
+#   Mounts 192.168.1.101:/srv/nfs/ocp via a privileged pod and wipes all
+#   subdirectories. Prevents stale FileNet registrations / tablespace conflicts
+#   on re-install. Skip with -e "wipe_nfs=no".
+#
 # What is NOT removed:
 #   - OpenShift GitOps operator
 #   - NFS StorageClass / provisioner
@@ -31,6 +36,9 @@
     - "../group_vars/all.yml"
   vars:
     confirm: "no"
+    nfs_server: "192.168.1.101"
+    nfs_export: "/srv/nfs/ocp"
+    wipe_nfs: "yes"   # set -e "wipe_nfs=no" to skip NFS cleanup
 
   pre_tasks:
     - name: Log in to OpenShift (ocp_token variable)
@@ -147,6 +155,54 @@
       ansible.builtin.debug:
         msg: "infra namespace: {{ 'deleted' if _infra_ns_delete.changed else 'already absent' }}"
 
+    # ── NFS volume wipe ───────────────────────────────────────────────────────
+    # Runs a privileged pod in the default namespace that mounts the NFS export
+    # and wipes all subdirectories that were created by the baw/infra PVCs.
+    # Without this, stale FileNet server registrations and old DB data on NFS
+    # cause issues (CPE ~12min startup hang, tablespace conflicts) on re-install.
+
+    - name: Wipe NFS export directories via privileged pod
+      ansible.builtin.shell: |
+        cat <<'EOF' | oc apply -f -
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: nfs-wipe
+          namespace: default
+        spec:
+          restartPolicy: Never
+          hostNetwork: true
+          containers:
+          - name: wipe
+            image: registry.access.redhat.com/ubi8/ubi-minimal:latest
+            command:
+              - /bin/sh
+              - -c
+              - |
+                microdnf install -y nfs-utils 2>/dev/null || true
+                mkdir -p /mnt/nfs
+                mount -t nfs {{ nfs_server }}:{{ nfs_export }} /mnt/nfs
+                echo "NFS contents before wipe:"
+                ls /mnt/nfs/
+                find /mnt/nfs -mindepth 1 -maxdepth 1 -type d | while read d; do
+                  echo "Wiping $d ..."
+                  rm -rf "$d"
+                done
+                echo "NFS contents after wipe:"
+                ls /mnt/nfs/
+                umount /mnt/nfs
+                echo "NFS wipe complete."
+            securityContext:
+              privileged: true
+              runAsUser: 0
+        EOF
+        oc wait --for=condition=Ready pod/nfs-wipe -n default --timeout=60s
+        oc logs -f pod/nfs-wipe -n default
+        oc delete pod nfs-wipe -n default --ignore-not-found
+      changed_when: false
+      failed_when: false
+      when: wipe_nfs | default('yes') | lower == 'yes'
+
     # ── Cluster-level cleanup ─────────────────────────────────────────────────
 
     - name: Remove baw-ca-bundle from openshift-config
@@ -195,6 +251,8 @@
           - "    - Namespace          : {{ baw_namespace }}"
           - "    - Namespace          : {{ infra_namespace }}"
           - "    - Cert work dir      : {{ cert_work_dir }}"
+          - ""
+          - "  NFS wipe        : {{ 'done (' + nfs_server + ':' + nfs_export + ')' if wipe_nfs | default('yes') | lower == 'yes' else 'skipped (-e wipe_nfs=no)' }}"
           - ""
           - "  Preserved (cluster infrastructure):"
           - "    - OpenShift GitOps operator"
