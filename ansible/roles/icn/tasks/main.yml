@@ -578,6 +578,78 @@
                       echo "  ${REPO_ID} done."
                     done
 
+                    echo "=== Phase 2: Connection points ==="
+                    for ENTRY in "DOCS:Docs Objectstore:docs" "DOS:ICMDesign Objectstore:icmdos" "TOS:ICMTarget Objectstore:icmtos"; do
+                      OS="${ENTRY%%:*}"
+                      REST="${ENTRY#*:}"
+                      REPO_NAME="${REST%%:*}"
+                      OS_LOWER="${REST##*:}"
+                      REPO_ID="${OS_LOWER}_CIWEBADMIN"
+                      CP_NAME="${OS_LOWER}-cp"
+                      echo "--- Connection point for ${REPO_ID} (${CP_NAME}) ---"
+
+                      P8_RESP=$(curl -sk -b "${COOKIES}" -c "${COOKIES}" \
+                        -H "security_token: ${TOKEN}" \
+                        -X POST "https://${ICN_HOST}/navigator/jaxrs/p8/logon" \
+                        -H "Content-Type: application/x-www-form-urlencoded" \
+                        --data-urlencode "desktop=admin" \
+                        --data-urlencode "repositoryId=${REPO_ID}" \
+                        --data-urlencode "userid=${ICN_USER}" \
+                        --data-urlencode "password=${ICN_PASS}" \
+                        --data-urlencode "displayName=${REPO_NAME}" \
+                        --data-urlencode "serverName=${CPE_MTOM}" \
+                        --data-urlencode "objectStore=${OS}" \
+                        --data-urlencode "objectStoreDisplayName=${REPO_NAME}" \
+                        --data-urlencode "protocol=FileNetP8WSI")
+                      refresh_token "${P8_RESP}"
+                      echo "  P8 logon: ${P8_RESP:0:80}..."
+
+                      ADDON_RESP=$(curl -sk -b "${COOKIES}" -c "${COOKIES}" \
+                        -H "security_token: ${TOKEN}" \
+                        -X POST "https://${ICN_HOST}/navigator/jaxrs/admin/p8/addAddOn" \
+                        -H "Content-Type: application/x-www-form-urlencoded" \
+                        --data-urlencode "application=navigator" \
+                        --data-urlencode "repositoryId=${REPO_ID}" \
+                        --data-urlencode "values=CEWEBSearchAddOn" \
+                        --data-urlencode "userid=${ICN_USER}" \
+                        --data-urlencode "login_desktop=admin" \
+                        --data-urlencode "objectstore=${OS}" \
+                        --data-urlencode "desktop=admin")
+                      refresh_token "${ADDON_RESP}"
+                      echo "  addAddOn: ${ADDON_RESP:0:120}..."
+
+                      JSON_EDIT=$(printf '{"repositoryConfig":{"type":"p8","id":"%s","version":"2.0","serverName":"%s","objectStore":"%s","name":"%s","objectStoreName":"%s","protocol":"FileNetP8WSI","useSSO":false,"enableWSI":true,"maxHits":1000,"timeoutInSeconds":"60","connectionPoint":"%s:1","isValid":true,"isWarn":"false"}}' \
+                        "${OS_LOWER}" "${CPE_MTOM}" "${OS}" "${REPO_NAME}" "${REPO_NAME}" "${CP_NAME}")
+                      EDIT_RESP=$(curl -sk -b "${COOKIES}" -c "${COOKIES}" \
+                        -H "security_token: ${TOKEN}" \
+                        -X POST "https://${ICN_HOST}/navigator/jaxrs/admin/p8/updateAdminRepositoryData" \
+                        -H "Content-Type: application/x-www-form-urlencoded" \
+                        --data-urlencode "application=navigator" \
+                        --data-urlencode "repositoryId=${REPO_ID}" \
+                        --data-urlencode "userid=${ICN_USER}" \
+                        --data-urlencode "login_desktop=admin" \
+                        --data-urlencode "action=edit" \
+                        --data-urlencode "json_post=${JSON_EDIT}" \
+                        --data-urlencode "desktop=admin")
+                      refresh_token "${EDIT_RESP}"
+                      echo "  edit with cp: ${EDIT_RESP:0:120}..."
+
+                      MAP_RESP=$(curl -sk -b "${COOKIES}" -c "${COOKIES}" \
+                        -H "security_token: ${TOKEN}" \
+                        -X POST "https://${ICN_HOST}/navigator/jaxrs/admin/configuration" \
+                        -H "Content-Type: application/x-www-form-urlencoded" \
+                        --data-urlencode "application=navigator" \
+                        --data-urlencode "action=updatePropertiesMapping" \
+                        --data-urlencode "id=${REPO_ID}" \
+                        --data-urlencode "userid=${ICN_USER}" \
+                        --data-urlencode "login_desktop=admin" \
+                        --data-urlencode "configuration=RepositoryConfig" \
+                        --data-urlencode 'json_post={"propertiesMappingData":[]}' \
+                        --data-urlencode "desktop=admin")
+                      refresh_token "${MAP_RESP}"
+                      echo "  ${REPO_ID} connection point done."
+                    done
+
                     echo "ICN repository initialisation complete."
             volumes:
               - name: tmp-dir
