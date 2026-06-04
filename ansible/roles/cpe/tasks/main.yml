@@ -554,7 +554,7 @@
 
 - name: Initialize FileNet GCD domain via container-native API
   ansible.builtin.shell: >
-    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} --
+    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} -c cpe --
     curl -sk -o /dev/null -w "%{http_code}"
     -X POST
     -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
@@ -568,7 +568,7 @@
 
 - name: Register LDAP directory configuration on the domain
   ansible.builtin.shell: >
-    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} --
+    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} -c cpe --
     curl -sk -o /dev/null -w "%{http_code}"
     -X POST
     -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
@@ -607,7 +607,7 @@
 
 - name: Create object store database connection
   ansible.builtin.shell: >
-    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} --
+    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} -c cpe --
     curl -sk -o /dev/null -w "%{http_code}"
     -X POST
     -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
@@ -624,7 +624,7 @@
 
 - name: Create object stores
   ansible.builtin.shell: >
-    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} --
+    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} -c cpe --
     curl -sk -o /dev/null -w "%{http_code}"
     -X POST
     -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
@@ -641,7 +641,7 @@
 
 - name: Install CE addons on object stores
   ansible.builtin.shell: >
-    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} --
+    oc exec -n {{ baw_namespace }} {{ _cpe_pod.stdout }} -c cpe --
     curl -sk -o /dev/null -w "%{http_code}"
     -X PUT
     -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
