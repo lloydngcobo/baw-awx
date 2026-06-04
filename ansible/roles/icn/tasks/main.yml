@@ -385,6 +385,202 @@
     -n {{ baw_namespace }} --timeout={{ pod_ready_timeout }}s
   changed_when: false
 
+# ── ICN Repository Initialisation Job ────────────────────────────────────────
+# Modelled on install/icn/icn-job-init-repos.yaml from baw-microshift-rhel.
+# Logs in via /navigator/jaxrs/logon, sets adminUsers, creates DOCS/DOS/TOS
+# P8 repositories and connection points.  Must complete before case-init.
+
+- name: Check if ICN init-repos Job already completed
+  ansible.builtin.shell: >
+    oc get job job-icn-init-repos -n {{ baw_namespace }}
+    -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}'
+    2>/dev/null || echo ""
+  register: _icn_init_done
+  changed_when: false
+  failed_when: false
+
+- name: Delete ICN init-repos Job if not completed (allows spec update on retry)
+  ansible.builtin.shell: >
+    oc delete job job-icn-init-repos -n {{ baw_namespace }} --ignore-not-found
+  changed_when: false
+  when: _icn_init_done.stdout | trim != 'True'
+
+- name: Create ICN init-repos Job
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: job-icn-init-repos
+        namespace: "{{ baw_namespace }}"
+        labels:
+          app: job-icn-init-repos
+      spec:
+        completions: 1
+        parallelism: 1
+        backoffLimit: 5
+        template:
+          metadata:
+            labels:
+              app: job-icn-init-repos
+          spec:
+            restartPolicy: OnFailure
+            terminationGracePeriodSeconds: 30
+            containers:
+              - name: icn-init-repos
+                image: registry.access.redhat.com/ubi8/ubi-minimal:latest
+                imagePullPolicy: IfNotPresent
+                securityContext:
+                  capabilities:
+                    drop: ["ALL"]
+                  privileged: false
+                  runAsNonRoot: true
+                  allowPrivilegeEscalation: false
+                env:
+                  - name: CURL_CA_BUNDLE
+                    value: /shared/resources/cert-trusted/ca.crt
+                resources:
+                  limits:
+                    cpu: 500m
+                    memory: 256Mi
+                  requests:
+                    cpu: 100m
+                    memory: 64Mi
+                volumeMounts:
+                  - name: tmp-dir
+                    mountPath: /tmp
+                  - name: ca-tls-volume
+                    mountPath: /shared/resources/cert-trusted
+                command:
+                  - /bin/bash
+                  - '-ec'
+                  - |+
+                    ICN_HOST="icn-svc.{{ baw_namespace }}.svc.cluster.local:9443"
+                    ICN_USER="{{ cpe_admin_user }}"
+                    ICN_PASS="{{ cpe_admin_password }}"
+                    CPE_MTOM="https://cpe-svc.{{ baw_namespace }}.svc.cluster.local:9443/wsi/FNCEWS40MTOM"
+                    COOKIES="/tmp/icn-cookies.txt"
+
+                    echo "Waiting for ICN to respond..."
+                    until STATUS=$(curl -sk -o /dev/null -w "%{http_code}" "https://${ICN_HOST}/navigator/"); \
+                          echo "ICN status: ${STATUS}"; \
+                          echo "${STATUS}" | grep -qE "^(200|302|401)$"; do
+                      echo "ICN not ready yet, retrying in 15s..."
+                      sleep 15
+                    done
+
+                    echo "Logging on to ICN as ${ICN_USER}..."
+                    RESP=$(curl -sk -c "${COOKIES}" \
+                      -X POST "https://${ICN_HOST}/navigator/jaxrs/logon" \
+                      -H "Content-Type: application/x-www-form-urlencoded" \
+                      --data-urlencode "desktop=admin" \
+                      --data-urlencode "application=navigator" \
+                      --data-urlencode "userid=${ICN_USER}" \
+                      --data-urlencode "password=${ICN_PASS}")
+                    TOKEN=$(echo "${RESP}" | sed -n 's/.*"security_token":"\([^"]*\)".*/\1/p')
+                    if [ -z "${TOKEN}" ]; then
+                      echo "ERROR: No security_token in logon response."
+                      echo "Full response: ${RESP}"
+                      exit 1
+                    fi
+                    echo "Got security token."
+
+                    echo "Step 1-1: Updating ICN admin settings (adminUsers)..."
+                    JSON_ADMIN_CFG='{"settingsConfig":{"editServiceCustomURLEnabled":false,"editServiceDownloadLinkEnabled":true,"adminUsers":"{{ cpe_admin_user }},{{ ums_admin_user }},admin,odmadmin","absoluteSessionTimeoutDuration":120,"absoluteSessionTimeoutEnabled":false,"id":"default","globalId":"settings.navigator.default","fileTypes":["boxnote","excel","outlook","pdf","powerpoint","word"],"navigatorMode":0,"tempfileCleanupInterval":6,"tempfileExpirationInterval":24,"pluginInitAttempts":3,"taskManagerServiceEnabled":"false","taskManagerHeartBeatMonitor":false,"editFilesCleanupInterval":20,"mobileAccess":"true","disableAutocomplete":"true","helpUrl":"https://www.ibm.com/docs","logging.level":"2","encryptLinks":false,"customSettings":"{}","umsUrl":"","ssoLogOutURL":"","ssoLogOutMethodRedirect":false,"culturalCollation":"false","officeOnlineEnabled":false,"asperaEnabled":false,"userActionMacros":["added.p8","modified.p8","checkedOut.p8","added.cm","modified.cm","checkedOut.cm"],"iconStatus":["docHold","docNotes","docMinorVersions","docDeclaredRecord","docBookmarks","docCheckedOut","workItemSuspended","workItemDeadlineImportance","workItemDeadlineReminderSent","workItemLocked","workItemCheckedOut"]},"objectExpiration":10,"fileTypesMappingData":[{"id":"pdf","_attributes":{"name":"PDF","description":"Adobe Portable Document Format(PDF)","contentTypes":"application/pdf","onlyUseInETAssociations":false}},{"id":"word","_attributes":{"name":"Word","description":"Microsoft Office Word","contentTypes":"application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.wordprocessingml.template","onlyUseInETAssociations":false}},{"id":"excel","_attributes":{"name":"Excel","description":"Microsoft Office Excel","contentTypes":"application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.spreadsheetml.template","onlyUseInETAssociations":false}},{"id":"powerpoint","_attributes":{"name":"PowerPoint","description":"Microsoft Office PowerPoint","contentTypes":"application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.presentationml.slideshow,application/vnd.openxmlformats-officedocument.presentationml.template","onlyUseInETAssociations":false}},{"id":"outlook","_attributes":{"name":"Outlook","description":"Microsoft Office Outlook","contentTypes":"application/x-filenet-filetype-msg,application/x-filenet-fileext-msg,application/vnd.ms-outlook","onlyUseInETAssociations":false}},{"id":"boxnote","_attributes":{"name":"Box Note","description":"Box Note","contentTypes":"application/x-box-note","onlyUseInETAssociations":false}}],"interfaceTextArray":[]}'
+                    curl -sk -b "${COOKIES}" \
+                      -H "security_token: ${TOKEN}" \
+                      -X POST "https://${ICN_HOST}/navigator/jaxrs/admin/updateAdminSettingsData" \
+                      --data-urlencode "action=update" \
+                      --data-urlencode "application=navigator" \
+                      --data-urlencode "login_desktop=admin" \
+                      --data-urlencode "securityTopic=settings.settings" \
+                      --data-urlencode "userid=${ICN_USER}" \
+                      --data-urlencode "json_post=${JSON_ADMIN_CFG}" | cut -c1-120
+                    echo "  Admin settings done."
+
+                    for ENTRY in "DOCS:Docs Objectstore" "DOS:ICMDesign Objectstore" "TOS:ICMTarget Objectstore"; do
+                      OS="${ENTRY%%:*}"
+                      case "${OS}" in
+                        DOS) OS_LOWER="icmdos" ;;
+                        TOS) OS_LOWER="icmtos" ;;
+                        *)   OS_LOWER=$(echo "${OS}" | tr '[:upper:]' '[:lower:]') ;;
+                      esac
+                      REPO_NAME="${ENTRY#*:}"
+                      REPO_ID="${OS_LOWER}_CIWEBADMIN"
+                      echo "--- Processing repository: ${REPO_ID} ---"
+
+                      P8_RESP=$(curl -sk -b "${COOKIES}" \
+                        -X POST "https://${ICN_HOST}/navigator/jaxrs/p8/logon" \
+                        -H "Content-Type: application/x-www-form-urlencoded" \
+                        -H "security_token: ${TOKEN}" \
+                        --data-urlencode "desktop=admin" \
+                        --data-urlencode "repositoryId=${REPO_ID}" \
+                        --data-urlencode "userid=${ICN_USER}" \
+                        --data-urlencode "password=${ICN_PASS}" \
+                        --data-urlencode "displayName=${REPO_NAME}" \
+                        --data-urlencode "serverName=${CPE_MTOM}" \
+                        --data-urlencode "objectStore=${OS}" \
+                        --data-urlencode "objectStoreDisplayName=${REPO_NAME}" \
+                        --data-urlencode "protocol=FileNetP8WSI")
+                      echo "  P8 logon: ${P8_RESP:0:200}"
+
+                      JSON_POST=$(printf '{"repositoryConfig":{"type":"p8","id":"%s","version":"2.0","serverName":"%s","objectStore":"%s","name":"%s","objectStoreName":"%s","protocol":"FileNetP8WSI","useSSO":false,"enableWSI":true,"maxHits":1000,"timeoutInSeconds":"60","simpleSearchMaxResults":"5000","searchMaxResults":"0","maxDownloadSize":0,"maxInMemoryRetrieveSize":0,"traceLevel":0,"portNumber":"0","docNameProp":"DocumentTitle","folderNameProp":"FolderName","cmisRepositoryID":"*","cmisBindingType":"AtomPub","checkinAsMajorVersion":true,"addAsMajorVersion":true,"globalId":"repository.navigator.p8defaultsettings","defaultSearchType":"document","defaultSearchVersion":"releasedversion","allClassesSearch":"documentsIncludesNonFolders","teamspaceTemplatePermissions":"[]","teamspacePermissions":"[]","redactionPermissions":"[]","redactionPolicyPermissions":"[]","entryTemplatePermissions":"[]","searchPermissions":"[]","searchDefCols":["{NAME}","ContentSize","LastModifier","DateLastModified","MajorVersionNumber"],"folderDefCols":["{NAME}","ContentSize","LastModifier","DateLastModified","MajorVersionNumber"],"documentSystemProperties":["Creator","DateCreated","LastModifier","DateLastModified","Id","IsReserved","IsCurrentVersion","MajorVersionNumber","MinorVersionNumber","ContentSize","MimeType"],"folderSystemProperties":["Creator","DateCreated","Id","PathName"],"searchShowHiddenProperties":true,"restrictedSearchDocumentsType":true,"restrictedSearchFoldersType":true,"includeMIMETypesInSearchResults":true,"matchAll":true,"usePartFileName":true,"includeAttrGroupInAttrDisplayName":true,"keepInAutoFolder":true,"burnPDFToPDF":"true","approvalWorkflowEnabled":"true","annotationSecurity":"inherit","statusDocCheckedOut":"true","statusDocHold":true,"statusDocNotes":true,"statusDocFavorite":"true","statusOffline":"true","statusWorkItemDeadline":"true","statusWorkItemLocked":"true","isValid":true,"isWarn":"false"}}' \
+                        "${OS_LOWER}" "${CPE_MTOM}" "${OS}" "${REPO_NAME}" "${REPO_NAME}")
+
+                      SAVE_RESP=$(curl -sk -b "${COOKIES}" \
+                        -X POST "https://${ICN_HOST}/navigator/jaxrs/admin/p8/updateAdminRepositoryData" \
+                        -H "Content-Type: application/x-www-form-urlencoded" \
+                        -H "security_token: ${TOKEN}" \
+                        --data-urlencode "application=navigator" \
+                        --data-urlencode "repositoryId=${REPO_ID}" \
+                        --data-urlencode "userid=${ICN_USER}" \
+                        --data-urlencode "login_desktop=admin" \
+                        --data-urlencode "action=add" \
+                        --data-urlencode "json_post=${JSON_POST}" \
+                        --data-urlencode "desktop=admin")
+                      echo "  Save: ${SAVE_RESP:0:200}"
+                      if echo "${SAVE_RESP}" | grep -q '"error"\|"errors"'; then
+                        if echo "${SAVE_RESP}" | grep -qi 'already exist\|duplicate\|exists'; then
+                          echo "  ${REPO_ID} already exists, skipping."
+                        else
+                          echo "ERROR saving ${REPO_ID}: ${SAVE_RESP}"
+                          exit 1
+                        fi
+                      fi
+
+                      curl -sk -b "${COOKIES}" \
+                        -X POST "https://${ICN_HOST}/navigator/jaxrs/admin/configuration" \
+                        -H "security_token: ${TOKEN}" \
+                        --data-urlencode "action=updatePropertiesMapping" \
+                        --data-urlencode "id=${OS_LOWER}" \
+                        --data-urlencode "userid=${ICN_USER}" \
+                        --data-urlencode "login_desktop=admin" \
+                        --data-urlencode "configuration=RepositoryConfig" \
+                        --data-urlencode 'json_post={"propertiesMappingData":[]}' \
+                        --data-urlencode "desktop=admin" | cut -c1-120
+                      echo "  ${REPO_ID} done."
+                    done
+
+                    echo "ICN repository initialisation complete."
+            volumes:
+              - name: tmp-dir
+                emptyDir: {}
+              - name: ca-tls-volume
+                configMap:
+                  name: shared-ssl-config
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+  when: _icn_init_done.stdout | trim != 'True'
+
+- name: Wait for ICN init-repos Job to complete
+  ansible.builtin.shell: >
+    kubectl wait --for=condition=complete job/job-icn-init-repos
+    -n {{ baw_namespace }} --timeout={{ pod_ready_timeout }}s
+  changed_when: false
+  when: _icn_init_done.stdout | trim != 'True'
+
 - name: ICN summary
   ansible.builtin.debug:
     msg:
