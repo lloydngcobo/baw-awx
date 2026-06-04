@@ -574,32 +574,7 @@
     -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
     -H "Content-Type: application/json"
     "http://localhost:9080/cpe/init/v1/domain/directoryConfigs"
-    -d @-
-  args:
-    stdin: |
-      {
-        "adminUserNames": ["{{ cpe_admin_user }}"],
-        "groupMembershipSearchFilter": "(|(&(objectclass=groupofnames)(member={0}))(&(objectclass=groupofuniquenames)(uniquemember={0})))",
-        "groupSearchFilter": "(&(cn={0})(|(objectclass=groupofnames)(objectclass=groupofuniquenames)(objectclass=groupofurls)))",
-        "dirSvcUser": "{{ ldap_bind_dn }}",
-        "userBaseDN": "{{ ldap_base_dn }}",
-        "sslEnabled": "false",
-        "groupDisplayNameAttr": "cn",
-        "adminsGroupNames": ["p8admins"],
-        "dirSvcHostname": "{{ ldap_host }}",
-        "dcType": "Tivoli",
-        "directoryProviderName": "ldap",
-        "userSearchFilter": "(&(uid={0})(objectclass=person))",
-        "groupNameAttribute": "cn",
-        "userNameAttribute": "uid",
-        "dirSvcPort": "{{ ldap_port }}",
-        "groupBaseDN": "{{ ldap_base_dn }}",
-        "userDisplayNameAttr": "uid",
-        "allowEmailOrUPNShortNames": "false",
-        "dirSvcPasswd": "{{ ldap_bind_password }}",
-        "userUniqueIDAttribute": "ibm-entryUuid",
-        "groupUniqueIDAttribute": "ibm-entryUuid"
-      }
+    -d '{"adminUserNames":["{{ cpe_admin_user }}"],"groupMembershipSearchFilter":"(|(&(objectclass=groupofnames)(member={0}))(&(objectclass=groupofuniquenames)(uniquemember={0})))","groupSearchFilter":"(&(cn={0})(|(objectclass=groupofnames)(objectclass=groupofuniquenames)(objectclass=groupofurls)))","dirSvcUser":"{{ ldap_bind_dn }}","userBaseDN":"{{ ldap_base_dn }}","sslEnabled":"false","groupDisplayNameAttr":"cn","adminsGroupNames":["p8admins"],"dirSvcHostname":"{{ ldap_host }}","dcType":"Tivoli","directoryProviderName":"ldap","userSearchFilter":"(&(uid={0})(objectclass=person))","groupNameAttribute":"cn","userNameAttribute":"uid","dirSvcPort":"{{ ldap_port }}","groupBaseDN":"{{ ldap_base_dn }}","userDisplayNameAttr":"uid","allowEmailOrUPNShortNames":"false","dirSvcPasswd":"{{ ldap_bind_password }}","userUniqueIDAttribute":"ibm-entryUuid","groupUniqueIDAttribute":"ibm-entryUuid"}'
   register: _dir_cfg
   changed_when: _dir_cfg.stdout | trim == "200"
   failed_when: _dir_cfg.stdout | trim not in ['200', '409']
