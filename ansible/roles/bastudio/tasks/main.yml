@@ -1540,6 +1540,12 @@
   changed_when: false
   failed_when: false
 
+- name: Delete case-init Job if not completed (allows spec update on retry)
+  ansible.builtin.shell: >
+    oc delete job job-bastudio-case-init -n {{ baw_namespace }} --ignore-not-found
+  changed_when: false
+  when: _case_init_done.stdout | trim != 'True'
+
 - name: Create case-init PersistentVolumeClaim
   kubernetes.core.k8s:
     state: present
