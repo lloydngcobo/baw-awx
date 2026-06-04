@@ -650,10 +650,10 @@
     -u {{ cpe_admin_user }}:{{ cpe_admin_password }}
     -H "Content-Type: application/json"
     "http://localhost:9080/cpe/init/v1/objectstores/{{ item.sym }}/workflow/"
-    -d '{"adminGroup":"p8admins","configGroup":"p8admins","indexTableSpace":"{{ item.index }}","dataTableSpace":"{{ item.sym | lower }}_db_tbs","connectionPointName":"{{ item.sym | lower }}-cp","regionName":"{{ item.sym | lower }}-region","regionNumber":"1","dateTimeMask":"mm/dd/yy hh:tt am","locale":"en"}'
+    -d '{"adminGroup":"p8admins","configGroup":"p8admins","indexTableSpace":"{{ item.index }}","dataTableSpace":"{{ item.tbs }}","connectionPointName":"{{ item.sym | lower }}-cp","regionName":"{{ item.sym | lower }}-region","regionNumber":"1","dateTimeMask":"mm/dd/yy hh:tt am","locale":"en"}'
   loop:
-    - { sym: "DOS", index: "{{ dos_db_name }}indexts" }
-    - { sym: "TOS", index: "{{ tos_db_name }}indexts" }
+    - { sym: "DOS", index: "{{ dos_db_name }}indexts", tbs: "{{ dos_db_name }}_tbs" }
+    - { sym: "TOS", index: "{{ tos_db_name }}indexts", tbs: "{{ tos_db_name }}_tbs" }
   loop_control:
     label: "{{ item.sym }}"
   register: _workflow_cp
