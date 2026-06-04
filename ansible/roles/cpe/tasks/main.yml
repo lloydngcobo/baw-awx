@@ -580,7 +580,6 @@
   register: _dir_cfg
   changed_when: _dir_cfg.stdout | trim == "200"
   failed_when: _dir_cfg.stdout | trim not in ['200', '409']
-  no_log: true
 
 - name: Create object store database connection
   ansible.builtin.shell: >
