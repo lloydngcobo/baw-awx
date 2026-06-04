@@ -1593,12 +1593,9 @@
                     drop:
                       - ALL
                   privileged: false
-                  runAsUser: 1000140000
                   runAsNonRoot: true
                   readOnlyRootFilesystem: false
                   allowPrivilegeEscalation: false
-                  seccompProfile:
-                    type: RuntimeDefault
                 command:
                   - sh
                   - '-c'
