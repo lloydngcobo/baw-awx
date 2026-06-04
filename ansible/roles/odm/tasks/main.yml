@@ -189,9 +189,7 @@
           spec:
             imagePullSecrets:
               - name: ibm-entitlement-key
-            securityContext:
-              runAsUser: 1000140000
-              fsGroup: 1000140000
+            securityContext: {}
             containers:
               - name: decisioncenter
                 image: "{{ odm_dc_image }}"
@@ -234,8 +232,6 @@
                   runAsNonRoot: true
                   readOnlyRootFilesystem: false
                   allowPrivilegeEscalation: false
-                  seccompProfile:
-                    type: RuntimeDefault
                 readinessProbe:
                   tcpSocket:
                     port: 9453
@@ -335,9 +331,7 @@
           spec:
             imagePullSecrets:
               - name: ibm-entitlement-key
-            securityContext:
-              runAsUser: 1000140000
-              fsGroup: 1000140000
+            securityContext: {}
             containers:
               - name: decisionserverconsole
                 image: "{{ odm_dsc_image }}"
@@ -380,8 +374,6 @@
                   runAsNonRoot: true
                   readOnlyRootFilesystem: false
                   allowPrivilegeEscalation: false
-                  seccompProfile:
-                    type: RuntimeDefault
                 readinessProbe:
                   tcpSocket:
                     port: 9443
@@ -481,9 +473,7 @@
           spec:
             imagePullSecrets:
               - name: ibm-entitlement-key
-            securityContext:
-              runAsUser: 1000140000
-              fsGroup: 1000140000
+            securityContext: {}
             containers:
               - name: decisionserverruntime
                 image: "{{ odm_dsr_image }}"
@@ -529,8 +519,6 @@
                   runAsNonRoot: true
                   readOnlyRootFilesystem: false
                   allowPrivilegeEscalation: false
-                  seccompProfile:
-                    type: RuntimeDefault
                 readinessProbe:
                   tcpSocket:
                     port: 9443
@@ -630,9 +618,7 @@
           spec:
             imagePullSecrets:
               - name: ibm-entitlement-key
-            securityContext:
-              runAsUser: 1000140000
-              fsGroup: 1000140000
+            securityContext: {}
             containers:
               - name: decisionrunner
                 image: "{{ odm_dr_image }}"
@@ -675,8 +661,6 @@
                   runAsNonRoot: true
                   readOnlyRootFilesystem: false
                   allowPrivilegeEscalation: false
-                  seccompProfile:
-                    type: RuntimeDefault
                 readinessProbe:
                   tcpSocket:
                     port: 9443
