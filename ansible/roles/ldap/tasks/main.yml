@@ -498,7 +498,7 @@
     -D "cn=root" -w "{{ ldap_admin_password }}"
     -b "ou=dev,{{ ldap_base_dn }}"
     "(|(uid=p8admin)(uid=bawadmin)(uid=bindldap))" uid
-    2>/dev/null | grep -c "^uid:"
+    2>/dev/null | grep -ciE "uid=(p8admin|bawadmin|bindldap),"
   register: _ldap_verify
   until: (_ldap_verify.stdout | default('0') | trim | int) >= 3
   retries: 10
@@ -513,7 +513,7 @@
     ldapsearch -h localhost -p 9389
     -D "uid=p8admin,ou=dev,{{ ldap_base_dn }}" -w "{{ ldap_admin_password }}"
     -b "uid=p8admin,ou=dev,{{ ldap_base_dn }}" -s base "(objectClass=*)" uid
-    2>/dev/null | grep -c "^uid:"
+    2>/dev/null | grep -ci "uid=p8admin"
   register: _ldap_bind_verify
   until: (_ldap_bind_verify.stdout | default('0') | trim | int) >= 1
   retries: 5
