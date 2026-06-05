@@ -430,8 +430,12 @@
     -D "cn=root" -w "{{ ldap_admin_password }}"
     -f /tmp/ldifs/base.ldif
   register: _ldap_base
+  # ISVD reports Ready (read works) before the suffix backend accepts writes.
+  # Retry the load until ldapadd succeeds (rc 0; -c treats apex already-exists as ok).
+  until: _ldap_base.rc == 0
+  retries: 15
+  delay: 10
   changed_when: _ldap_base.rc == 0
-  ignore_errors: true
   no_log: true
   when: (_ldap_base_check.stdout | default('0') | trim | int) == 0
 
@@ -453,8 +457,10 @@
     -D "cn=root" -w "{{ ldap_admin_password }}"
     -f /tmp/ldifs/users.ldif
   register: _ldap_users
+  until: _ldap_users.rc == 0
+  retries: 15
+  delay: 10
   changed_when: _ldap_users.rc == 0
-  ignore_errors: true
   no_log: true
   when: (_ldap_users_check.stdout | default('0') | trim | int) == 0
 
@@ -476,10 +482,45 @@
     -D "cn=root" -w "{{ ldap_admin_password }}"
     -f /tmp/ldifs/groups.ldif
   register: _ldap_groups
+  until: _ldap_groups.rc == 0
+  retries: 15
+  delay: 10
   changed_when: _ldap_groups.rc == 0
-  ignore_errors: true
   no_log: true
   when: (_ldap_groups_check.stdout | default('0') | trim | int) == 0
+
+# Hard verification — never proceed to CPE/case-init with an unseeded directory.
+# (CPE authenticates p8admin against this LDAP; an empty directory => GCD init 401.)
+- name: Verify LDAP users are searchable (p8admin, bawadmin, bindldap)
+  ansible.builtin.shell: >-
+    oc exec -n {{ infra_namespace }} -c ldap {{ _ldap_pod.stdout | trim }} --
+    ldapsearch -h localhost -p 9389
+    -D "cn=root" -w "{{ ldap_admin_password }}"
+    -b "ou=dev,{{ ldap_base_dn }}"
+    "(|(uid=p8admin)(uid=bawadmin)(uid=bindldap))" uid
+    2>/dev/null | grep -c "^uid:"
+  register: _ldap_verify
+  until: (_ldap_verify.stdout | default('0') | trim | int) >= 3
+  retries: 10
+  delay: 10
+  changed_when: false
+  failed_when: (_ldap_verify.stdout | default('0') | trim | int) < 3
+  no_log: true
+
+- name: Verify p8admin can bind (authenticates with its own password)
+  ansible.builtin.shell: >-
+    oc exec -n {{ infra_namespace }} -c ldap {{ _ldap_pod.stdout | trim }} --
+    ldapsearch -h localhost -p 9389
+    -D "uid=p8admin,ou=dev,{{ ldap_base_dn }}" -w "{{ ldap_admin_password }}"
+    -b "uid=p8admin,ou=dev,{{ ldap_base_dn }}" -s base "(objectClass=*)" uid
+    2>/dev/null | grep -c "^uid:"
+  register: _ldap_bind_verify
+  until: (_ldap_bind_verify.stdout | default('0') | trim | int) >= 1
+  retries: 5
+  delay: 5
+  changed_when: false
+  failed_when: (_ldap_bind_verify.stdout | default('0') | trim | int) < 1
+  no_log: true
 
 - name: LDAP summary
   ansible.builtin.debug:
