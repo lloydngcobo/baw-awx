@@ -241,6 +241,9 @@
     kubectl exec -n $NS $POD -- psql -U postgres -d postgres -tAc \
       "SELECT 1 FROM pg_database WHERE datname='$DB'" | grep -q 1 && echo CREATED
   register: _gcd
+  until: "'CREATED' in _gcd.stdout"
+  retries: 3
+  delay: 5
   changed_when: "'CREATED' in _gcd.stdout"
   failed_when: "'CREATED' not in _gcd.stdout"
   no_log: true
@@ -277,6 +280,9 @@
     kubectl exec -n $NS $POD -- psql -U postgres -d postgres -tAc \
       "SELECT 1 FROM pg_database WHERE datname='$DB'" | grep -q 1 && echo CREATED
   register: _docs
+  until: "'CREATED' in _docs.stdout"
+  retries: 3
+  delay: 5
   changed_when: "'CREATED' in _docs.stdout"
   failed_when: "'CREATED' not in _docs.stdout"
   no_log: true
@@ -313,6 +319,9 @@
     kubectl exec -n $NS $POD -- psql -U postgres -d postgres -tAc \
       "SELECT 1 FROM pg_database WHERE datname='$DB'" | grep -q 1 && echo CREATED
   register: _dos
+  until: "'CREATED' in _dos.stdout"
+  retries: 3
+  delay: 5
   changed_when: "'CREATED' in _dos.stdout"
   failed_when: "'CREATED' not in _dos.stdout"
   no_log: true
@@ -349,6 +358,9 @@
     kubectl exec -n $NS $POD -- psql -U postgres -d postgres -tAc \
       "SELECT 1 FROM pg_database WHERE datname='$DB'" | grep -q 1 && echo CREATED
   register: _tos
+  until: "'CREATED' in _tos.stdout"
+  retries: 3
+  delay: 5
   changed_when: "'CREATED' in _tos.stdout"
   failed_when: "'CREATED' not in _tos.stdout"
   no_log: true
@@ -381,6 +393,9 @@
     kubectl exec -n $NS $POD -- psql -U postgres -d postgres -tAc \
       "SELECT 1 FROM pg_database WHERE datname='$DB'" | grep -q 1 && echo CREATED
   register: _icn
+  until: "'CREATED' in _icn.stdout"
+  retries: 3
+  delay: 5
   changed_when: "'CREATED' in _icn.stdout"
   failed_when: "'CREATED' not in _icn.stdout"
   no_log: true
@@ -408,6 +423,9 @@
     kubectl exec -n $NS $POD -- psql -U postgres -d postgres -tAc \
       "SELECT 1 FROM pg_database WHERE datname='$DB'" | grep -q 1 && echo CREATED
   register: _bas
+  until: "'CREATED' in _bas.stdout"
+  retries: 3
+  delay: 5
   changed_when: "'CREATED' in _bas.stdout"
   failed_when: "'CREATED' not in _bas.stdout"
   no_log: true
@@ -437,6 +455,9 @@
     kubectl exec -n $NS $POD -- psql -U postgres -d postgres -tAc \
       "SELECT 1 FROM pg_database WHERE datname='$DB'" | grep -q 1 && echo CREATED
   register: _baw_rt
+  until: "'CREATED' in _baw_rt.stdout"
+  retries: 3
+  delay: 5
   changed_when: "'CREATED' in _baw_rt.stdout"
   failed_when: "'CREATED' not in _baw_rt.stdout"
   no_log: true
@@ -470,6 +491,9 @@
     kubectl exec -n $NS $POD -- psql -U postgres -d postgres -tAc \
       "SELECT 1 FROM pg_database WHERE datname='$DB'" | grep -q 1 && echo CREATED
   register: _aae
+  until: "'CREATED' in _aae.stdout"
+  retries: 3
+  delay: 5
   changed_when: "'CREATED' in _aae.stdout"
   failed_when: "'CREATED' not in _aae.stdout"
   no_log: true
@@ -503,6 +527,9 @@
     kubectl exec -n $NS $POD -- psql -U postgres -d postgres -tAc \
       "SELECT 1 FROM pg_database WHERE datname='$DB'" | grep -q 1 && echo CREATED
   register: _odm_db
+  until: "'CREATED' in _odm_db.stdout"
+  retries: 3
+  delay: 5
   changed_when: "'CREATED' in _odm_db.stdout"
   failed_when: "'CREATED' not in _odm_db.stdout"
   when: deploy_odm | default(false) | bool
