@@ -47,6 +47,44 @@
             storage: 20Gi
         storageClassName: "{{ storage_class_name }}"
 
+# ── Pod security: dedicated SA + anyuid (NOT privileged) ──────────────────────
+# The RHEL postgresql-16 image must run as its built-in UID 26 (postgres) so it
+# owns the tablespace directories it creates on the NFS RWX volume (mode 700).
+# A random restricted-v2 UID cannot read those dirs. anyuid grants RunAsAny
+# (keeps UID 26) WITHOUT host privilege — replaces the old privileged:true.
+
+- name: Create PostgreSQL ServiceAccount
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: postgresql-sa
+        namespace: "{{ infra_namespace }}"
+        labels:
+          app: baw-postgresql
+
+- name: Grant anyuid SCC to PostgreSQL ServiceAccount
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: postgresql-anyuid
+        namespace: "{{ infra_namespace }}"
+        labels:
+          app: baw-postgresql
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: system:openshift:scc:anyuid
+      subjects:
+        - kind: ServiceAccount
+          name: postgresql-sa
+          namespace: "{{ infra_namespace }}"
+
 - name: Deploy PostgreSQL
   kubernetes.core.k8s:
     state: present
@@ -60,6 +98,10 @@
           app: baw-postgresql
       spec:
         replicas: 1
+        # Recreate: ensure the old pod is terminated before the new one starts —
+        # two postgres instances on the same RWX volume would be unsafe.
+        strategy:
+          type: Recreate
         selector:
           matchLabels:
             app: baw-postgresql
@@ -68,14 +110,19 @@
             labels:
               app: baw-postgresql
           spec:
+            serviceAccountName: postgresql-sa
             securityContext:
+              runAsUser: 26
               fsGroup: 26
             containers:
               - name: postgresql
                 image: "{{ postgresql_image }}"
                 imagePullPolicy: IfNotPresent
                 securityContext:
-                  privileged: true
+                  runAsUser: 26
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop: ["ALL"]
                 ports:
                   - containerPort: 5432
                 envFrom:
